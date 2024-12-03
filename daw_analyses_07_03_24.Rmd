@@ -1,0 +1,1061 @@
+---
+title: "daw_analyses_07_03_24"
+author: "Daniel Petrie"
+date: "2024-07-03"
+output:
+  word_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+WD/Libraries/data
+
+```{r Global eval=FALSE}
+library("ggplot2") #For plotting
+library("GGally") #ggpairs()
+library("tidyverse") #Wranglin
+library("dplyr") #Wranglin
+library("interactions")
+library("lme4") #MLM
+library("lmerTest") #p-vals
+library("ggeffects") #For marginal/conditional effects plots
+#library("margins") #For margins() function. Useful for comparing margins from ggeffects
+library("marginaleffects") #For hypothesis_test()
+library("parameters") #Other useful marginal effects functions
+library("gdata") #upperTriangle()
+library("mgcv") #GAMM
+library("ggpubr") #Combining plots
+library("bmlm") #Centering made easy
+library("neuroCombat") #Harminization
+library("LNCDR") #waterfall plot, lunaize plots 
+library("gratia") #mgcv companion package. Using draw among other funcs.
+#library("scales") #For Bart function
+library("psych") #Descriptives
+library("ggrain") #Raincloud plot
+library("gammit") #For variance extraction
+library("Hmisc") #For rcorr
+library("see")
+#library("corrplot") #Corrplot()
+#Working directory (change to something better (onedrive?, something else?) at some point)
+#Hera feels correct at this moment. All files could live in directory R for this project.
+setwd("C:/Users/djpet/OneDrive/Documents/daw_resting_state")
+full <- read.csv("daw_project_081624.csv", header = TRUE)
+```
+
+
+11475 visit 2 should be removed.
+11498 visit 2 should be removed.
+11589 visit 2 should be removed.
+
+
+Cleaning
+
+
+```{r Cleaning}
+#Creating a different sex variable for some plots/analyses
+full <- full %>%
+  mutate(sex = as.character(sex),
+    sex_p = case_when(
+    sex == "M" ~ "Male",
+    sex == "F" ~ "Female",
+    TRUE ~ sex 
+  ))
+
+#Making visitnum a factor. Can change accordingly
+full$visitnum <- as.factor(full$visitnum)
+
+#Making sex a factor
+full$sex <- as.factor(full$sex)
+
+#Making an ordered factor.
+full$sex_p <- ordered(full$sex_p, levels = (c("Male", "Female")))
+
+#Inverse age for linear models.
+full$inv_age <- 1/full$age
+
+#Checking for duplicate rows due to weird merging situation I put myself in.
+full[which(duplicated(full$modelbased)),c(1:3, 8, 20)] #11475_2/11498_2/11589_2 are duplicates.
+#These ids have duplicated Daw visits, but different rest days. Taking rows with imaging data.
+
+full <- full %>%
+  filter(!(id == "11475" & visitnum == "2") & 
+           !(id == "11498" & visitnum == "2") &
+           !(id == "11589" & visitnum == "2"))
+
+#Treating visitnum as numeric
+full$visitnum_numeric <- as.numeric(full$visitnum)
+
+#Treating id as a factor variable
+full$id_fac <- as.factor(full$id)
+```
+
+This code below will be hashed out if results are the same. Residualizing some variables to use in analyses, but using GAM instead. I do not think the results would be that different considering fits are all generally linear.
+
+```{r Residualizing decision-making variables}
+#fss_resid <- gam(firststagestay ~ 1 + s(age, k = 3, fx = FALSE), data = full, na.action = na.exclude)
+#summary(fss_resid)
+#full$fss_resid_gam <- resid(fss_resid)
+#full$fss_resid_gam_z <- scale(full$fss_resid_gam)
+#
+#mb_resid <- gam(modelbased ~ 1 + s(age, k = 3, fx = FALSE), data = full, na.action = na.exclude)
+#summary(mb_resid)
+#full$mb_resid_gam <- resid(mb_resid)
+#full$mb_resid_gam_z <- scale(full$mb_resid_gam)
+#
+#mf_resid <- gam(modelfree ~ 1 + s(age, k = 3, fx = FALSE), data = full, na.action = na.exclude)
+#summary(mf_resid)
+#full$mf_resid_gam <- resid(mf_resid)
+#full$mf_resid_gam_z <- scale(full$mf_resid_gam)
+#
+##If need be
+##put_resid <- lm(harox_putamen_harm ~ 1 + age, data = full, na.action = na.exclude)
+##full$harox_putamen_harm_resid <- resid(put_resid)
+##full$harox_putamen_harm_resid_z <- scale(full$harox_putamen_harm_resid)
+#ggplot(full, aes(x = fss_resid_z, y = fss_resid_gam_z)) + geom_point()
+#ggplot(full, aes(x = age, y = fss_resid_z)) + geom_point() +
+#  geom_smooth(method = "gam", aes(group = 1))
+#ggplot(full, aes(x = age, y = fss_resid_gam_z)) + geom_point() +
+#  geom_smooth(method = "gam",aes(group = 1))
+#
+##Writing over itself to do less work
+#full$fss_resid_z <- full$fss_resid_gam_z
+#full$mb_resid_z <- full$mb_resid_gam_z
+#full$mf_resid_z <- full$mf_resid_gam_z
+```
+
+
+
+
+NOTE: Zero-order correlations, means, SD, of all study variables will be done in another script. ML LR results of the analytic sample, as well as general behavioral results have been conducted in another script. The purpose of this script is to analyze the Daw RL parameters, iron measures, and age. I can also add the cic atlas analyses here to be included in the supplement.
+
+
+# **Data Analyses Plan**
+
+## **Age and visit breakdown by study (7t or pet)**
+
+I need N/age range/% female/# of visits.
+
+```{r}
+#age range, 
+full %>% filter(study == "7T") %>% reframe(age_range = range(age))
+full %>% filter(study == "PET") %>% reframe(age_range = range(age))
+
+# of visits
+full %>% filter(study == "7T") %>% reframe(age_range = n())
+full %>% filter(study == "PET") %>% reframe(age_range = n())
+
+#%female
+full %>% filter(study == "7T") %>% select(sex) %>% table()
+full %>% filter(study == "PET") %>% select(sex) %>% table()
+
+#Getting unique ids for each study. Not that some individuals were in both studies.
+full %>% filter(study == "7T") %>% summarise(unique_ids = n_distinct(id))
+full  %>% summarise(unique_ids = n_distinct(id))
+full %>% filter(study == "PET") %>% summarise(unique_ids = n_distinct(id))
+
+#Looking at subjects who were in both studies
+t <- full %>%
+  group_by(id) %>%
+  filter(all(c("7T", "PET") %in% study)) %>%
+  ungroup()
+
+#Calculating difference in days between visits.
+t %>%     # Convert rest.date to Date type if it's not already
+  mutate(rest.date = as.Date(rest.date, format = "%Y-%m-%d"),
+         behave.date = as.Date(behave.date, format = "%Y-%m-%d")) %>%
+  group_by(id) %>%
+ # arrange(rest.date) %>%  # Ensure the dates are in chronological order
+  mutate(date_diff = rest.date - lag(rest.date),
+         behave_diff = behave.date - lag(behave.date)) %>%
+  select(id,visitnum,age,rest.date,behave.date,date_diff, behave_diff)
+  ungroup()
+  
+#If a reviewer asks, I can report this and potentially remove and run as sensitivity check.
+```
+
+
+## **Zero-order correlations and descriptive statistics**
+
+Variables I will be using for correlations:
+Age, MB, MF, FSS, Putamen, Caudate, Pallidum, NAcc
+
+```{r}
+cor_vars <- full %>%
+  select(age, modelbased, modelfree, firststagestay, 
+         harox_pallidum_harm, harox_nacc_harm,
+         harox_caudate_harm, harox_putamen_harm)
+cor(cor_vars, use = "complete.obs")
+Hmisc::rcorr(as.matrix(cor_vars))
+psych::describe(cor_vars)
+```
+
+
+## **Associations between iron measures and age**
+
+
+We replicate previous work examining age trajectories of nT2*w in the NAcc, globus pallidus, caudate, and putamen (CITE). We used four separate generalized additive mixed models that were specified as follows:
+
+
+$$
+
+nT2^*w_{i,t} = \beta_0 + \beta_1{sex}_{i} + \beta_2{visit}_{i,t} + f(\text{age}_{i,t}) + b_{0i} + \epsilon_{i,t}, \quad e \sim N(0,\sigma^2)   
+
+$$
+
+where $$nT2^*w_{i,t}$$ is the iron value for person $$i$$ on visit $$t$$. $$\beta_0$$ is the overall intercept of $$nT2*w$$, $$\beta_1$$ and $$\beta_2$$ are covariates for sex assigned at birth and visit number, respectively. $$f$$ represents a smooth function of age for the $$t$$-th repeated measure of the $$i$$-th individual. $$b_{0i}$$ represents the random intercept term for the $$i$$-th individual. All models were fit with 3 knots (i.e., k = 3) and unpenalized splines (i.e., all smoothing parameters are fixed to 0; fx = TRUE). We applied the Bonferroni correction to account for multiple comparisons ($$\alpha < 0.0125$$ uncorrected).
+
+
+```{r nT2*w ~ s(age) results}
+#pallidum
+pallidum_age1 <- gam(harox_pallidum_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                      s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+summary(pallidum_age1)
+extract_vc(pallidum_age1)
+
+#Figure
+draw(pallidum_age1)
+
+
+#Nacc
+nacc_age <- gam(harox_nacc_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                   s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(nacc_age)
+extract_vc(nacc_age)
+
+#Figure
+draw(nacc_age)
+
+#P-value test
+summary(nacc_age)$s.table[8] < 0.05/4
+
+
+#caudate
+ca_age <- gam(harox_caudate_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                 s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(ca_age)
+extract_vc(ca_age)
+
+#Figure
+draw(ca_age) 
+
+#Interesting shape to plot derivative (i.e., not a line)
+draw(derivatives(ca_age))
+
+
+
+#putamen
+put_age <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                  s(age, k = 3, fx = FALSE) + 
+                  s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(put_age)
+extract_vc(put_age)
+
+#Figure
+draw(put_age)
+```
+
+
+**All age smooths are significantly different than 0. Additionally, they are all positively associated with nT2*w such that as age increases, nT2*w increases.**
+
+
+## **Associations between RL parameters and age**
+
+
+Next, we examined the age trajectories of the RL parameters derived from the multilevel logistic regression model. We replicate previous work showing that the model based parameter increased across age (Decker et al., YEAR). Additionally, we examined age trajectories of the model free parameter and the first stage stay parameter. We used three separate generalized additive mixed models that were specified as follows:
+
+$$
+
+RL_{i,t} = \beta_0 + \beta_1{sex}_{i} + \beta_2{visit}_{i,t} + f(\text{age}_{i,t}) + b_{0i} + \epsilon_{i,t}, \quad e \sim N(0,\sigma^2)   
+
+$$
+
+where $$RL_{i,t}$$ is the RL parameter value for person $$i$$ on visit $$t$$. All other variables are specified and estimated identically as equation ##. We applied the Bonferroni? correction to account for multiple comparisons ($$\alpha < 0.0167$$ uncorrected).
+
+
+```{r Daw ~ s(age) results}
+#fss
+fss_age <- gam(firststagestay ~ 1 + sex + visitnum_numeric +
+                  s(age, k = 3, fx = F) +
+                  s(id_fac, bs = "re"),
+                      method = "REML",
+                      data = full)
+summary(fss_age)
+extract_vc(fss_age)
+
+#Figure
+draw(fss_age)
+
+
+
+#mb
+mb_age <- gam(modelbased ~ 1 + sex + visitnum_numeric +
+                         s(age, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                      method = "REML",
+                      data = full)
+summary(mb_age)
+extract_vc(mb_age)
+
+#Figure
+draw(mb_age)
+
+
+
+#mf
+mf_age <- gam(modelfree ~ 1 + sex + visitnum_numeric +
+                         s(age, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                      method = "REML",
+                      data = full)
+summary(mf_age)
+extract_vc(mf_age)
+
+#Figure
+draw(mf_age)
+```
+
+
+**All age smooths are significantly different than 0. Additionally, they are all positively associated with RL such that as age increases, RL parameters increase. Important to note that for FSS and MB, there is a main effect of sex, such that males have higher values than females controlling for age and experience with the task (i.e., visit number covariate inclusion).**
+
+
+## **Model Comparisons**
+
+Next, we examined the influence of age and the RL parameters on nT2*w trajectories. There is no evidence thus far linking daw parameters to the iron measures, so we have no a priori hypotheses about their associations. As such, we will compare the simplest model, with just a smooth for age, to a set of models where we add additional RL parameters in a stepwise fashion. We will compare the 4 models using AIC, and the model with the lowest AIC will be examined further.
+
+We used three separate generalized additive mixed models that were specified as follows: 
+
+```{r Model Comparisons FULL}
+#Maybe model comparison?
+test_1 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "ML",
+                     data = full)
+summary(test_1)
+test_2 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                s(fss_resid_z, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "ML",
+                     data = full)
+summary(test_2)
+test_3 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                 s(mb_resid_z, k = 3, fx = F) +
+                     s(id_fac, bs = "re"),
+                     method = "ML",
+                     data = full)
+summary(test_3)
+
+test_4 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                 s(mf_resid_z, k = 3, fx = F)+
+                     s(id_fac, bs = "re"),
+                     method = "ML",
+                     data = full)
+summary(test_4)
+
+test_5 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                 s(fss_resid_z, k = 3, fx = F) +
+                 s(mb_resid_z, k = 3, fx = F)+
+                     s(id_fac, bs = "re"),
+                     method = "ML",
+                     data = full)
+summary(test_5)
+
+test_6 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                 s(fss_resid_z, k = 3, fx = F) +
+                 s(mf_resid_z, k = 3, fx = F)+
+                     s(id_fac, bs = "re"),
+                     method = "ML",
+                     data = full)
+summary(test_6)
+test_7 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                 s(mf_resid_z, k = 3, fx = F) +
+                 s(mb_resid_z, k = 3, fx = F)+
+                     s(id_fac, bs = "re"),
+                     method = "ML",
+                     data = full)
+summary(test_7)
+test_8 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                 s(mb_resid_z, k = 3, fx = F) +
+                 s(mf_resid_z, k = 3, fx = F) +
+                 s(fss_resid_z, k = 3, fx = F)+
+                     s(id_fac, bs = "re"),
+                     method = "ML",
+                     data = full)
+summary(test_8)
+# Compare models using anova function
+#anova(test_1, 
+#      test_2, 
+#      test_3, 
+#      test_4,
+#      test_5, 
+#      test_6, 
+#      test_7, 
+#      test_8, 
+#      test = "F"
+#      )
+##Figure this weirdness out... difference between AIC and anova results.
+b <- c(AIC(test_1, 
+           test_2, 
+           test_3, 
+           test_4,
+           test_5, 
+           test_6, 
+           test_7, 
+           test_8
+           ))
+which.min(b[[2]])
+#
+#c <- c(BIC(test_1, 
+#           test_2, 
+#           test_3, 
+#           test_4,
+#           test_5, 
+#           test_6, 
+#           test_7, 
+#           test_8
+#           ))
+#which.min(c[[2]])
+#Other test orders
+anova(test_1, 
+      test_2,
+      test_5,
+      test_8,
+      test = "F")
+
+b <- c(test_1$aic, 
+       test_2$aic, 
+       test_5$aic, 
+       test_8$aic
+           )
+which.min(b)
+b
+```
+
+Model comparisons suggest that for pallidum, caudate, and NAcc, the simplest model with just age is the most appropriate. Either AIC chose model 1, or the inclusion of FSS was chosen, but not significant. For the putamen, the model with the addition of fss and mb fits best according to AIC. Anova results also suggest that model with FSS and MB is most parsimonious. 
+
+Main finding is that increases in habitual responding is associate with increased iron in putamen after controlling for age-related increases in this measure.
+
+A note on concurvity. It seems that the inclusion of the random intercept term in this way inflates the concurvity issue. If fit in a different way, the concurvity issue is less of a thing.
+
+
+## **Model comparisons to include in paper (shortened)**
+
+```{r Model Comparisons SHORT}
+#Vector of outcomes
+outcomes <- c("harox_putamen_harm", "harox_caudate_harm", "harox_nacc_harm", "harox_pallidum_harm")
+
+#Function for model comparisons.
+compare_models <- function(outcome, data) {
+  # Dynamically create the model formulas
+  model_1 <- as.formula(paste(outcome, "~ 1 + sex + visitnum_numeric + 
+                              s(age, k = 3, fx = F) + 
+                              s(id_fac, bs = 're')"))
+  model_2 <- as.formula(paste(outcome, "~ 1 + sex + visitnum_numeric + 
+                              s(age, k = 3, fx = F) + 
+                              s(fss_resid_z, k = 3, fx = F) + 
+                              s(id_fac, bs = 're')"))
+  model_5 <- as.formula(paste(outcome, "~ 1 + sex + visitnum_numeric + 
+                              s(age, k = 3, fx = F) + 
+                              s(fss_resid_z, k = 3, fx = F) + 
+                              s(mb_resid_z, k = 3, fx = F) + 
+                              s(id_fac, bs = 're')"))
+  model_8 <- as.formula(paste(outcome, "~ 1 + sex + visitnum_numeric + 
+                              s(age, k = 3, fx = F) + 
+                              s(mb_resid_z, k = 3, fx = F) + 
+                              s(mf_resid_z, k = 3, fx = F) + 
+                              s(fss_resid_z, k = 3, fx = F) + 
+                              s(id_fac, bs = 're')"))
+
+  # Fit the models
+  test_1 <- gam(model_1, method = "ML", data = data)
+  test_2 <- gam(model_2, method = "ML", data = data)
+  test_5 <- gam(model_5, method = "ML", data = data)
+  test_8 <- gam(model_8, method = "ML", data = data)
+  
+  # Compare models using ANOVA
+  anova_results <- anova(test_1, test_2, test_5, test_8, test = "F")
+  
+  # Compare models using AIC
+  aic_results <- c(test_1$aic, test_2$aic, test_5$aic, test_8$aic)
+  
+  # Find the model with the lowest AIC
+  best_model_index <- which.min(aic_results)
+  best_model <- rownames(aic_results)[best_model_index]
+  
+  #Extract summary and variance components
+  summaries <- list(
+    test_1 = summary(test_1),
+    test_2 = summary(test_2),
+    test_5 = summary(test_5),
+    test_8 = summary(test_8)
+  )
+  
+  var_comps <- list(
+    test_1 = gam.vcomp(test_1),
+    test_2 = gam.vcomp(test_2),
+    test_5 = gam.vcomp(test_5),
+    test_8 = gam.vcomp(test_8)
+  )
+  # Return the results
+  list(
+    anova = anova_results, 
+    aic = aic_results, 
+    best_model = best_model,
+    summaries = summaries,
+    var_comps = var_comps)
+}
+
+#Run function and extract stats of interest
+results <- lapply(outcomes, function(outcome) compare_models(outcome, full))
+
+#Printing out to create table
+results[[4]]$anova
+results[[4]]$aic
+results[[4]]$best_model
+results[[4]]$summaries$test_8
+results[[4]]$var_comps$test_8
+```
+
+## **Model comparisons to include in paper (shortened)**
+
+```{r Model Comparisons Sensitivity CIC}
+#Vector of outcomes
+outcomes <- c("cic_pre_caudate_harm", "cic_pos_caudate_harm", "cic_nacc_harm", "cic_pallidum_harm",
+              "cic_pre_dorsal_put_harm", "cic_pre_ventral_put_harm", 
+              "cic_pos_dorsal_put_harm", "cic_pos_ventral_put_harm")
+
+#Function for model comparisons.
+compare_models <- function(outcome, data) {
+  # Dynamically create the model formulas
+  model_1 <- as.formula(paste(outcome, "~ 1 + sex + visitnum_numeric + 
+                              s(age, k = 3, fx = F) + 
+                              s(id_fac, bs = 're')"))
+  model_2 <- as.formula(paste(outcome, "~ 1 + sex + visitnum_numeric + 
+                              s(age, k = 3, fx = F) + 
+                              s(fss_resid_z, k = 3, fx = F) + 
+                              s(id_fac, bs = 're')"))
+  model_5 <- as.formula(paste(outcome, "~ 1 + sex + visitnum_numeric + 
+                              s(age, k = 3, fx = F) + 
+                              s(fss_resid_z, k = 3, fx = F) + 
+                              s(mb_resid_z, k = 3, fx = F) + 
+                              s(id_fac, bs = 're')"))
+  model_8 <- as.formula(paste(outcome, "~ 1 + sex + visitnum_numeric + 
+                              s(age, k = 3, fx = F) + 
+                              s(mb_resid_z, k = 3, fx = F) + 
+                              s(mf_resid_z, k = 3, fx = F) + 
+                              s(fss_resid_z, k = 3, fx = F) + 
+                              s(id_fac, bs = 're')"))
+
+  # Fit the models
+  test_1 <- gam(model_1, method = "ML", data = data)
+  test_2 <- gam(model_2, method = "ML", data = data)
+  test_5 <- gam(model_5, method = "ML", data = data)
+  test_8 <- gam(model_8, method = "ML", data = data)
+  
+  # Compare models using ANOVA
+  anova_results <- anova(test_1, test_2, test_5, test_8, test = "F")
+  
+  # Compare models using AIC
+  aic_results <- AIC(test_1, test_2, test_5, test_8)
+  
+  # Find the model with the lowest AIC
+  best_model_index <- which.min(aic_results$AIC)
+  best_model <- rownames(aic_results)[best_model_index]
+  
+  #Extract summary and variance components
+  summaries <- list(
+    test_1 = summary(test_1),
+    test_2 = summary(test_2),
+    test_5 = summary(test_5),
+    test_8 = summary(test_8)
+  )
+  
+  var_comps <- list(
+    test_1 = gam.vcomp(test_1),
+    test_2 = gam.vcomp(test_2),
+    test_5 = gam.vcomp(test_5),
+    test_8 = gam.vcomp(test_8)
+  )
+  # Return the results
+  list(
+    anova = anova_results, 
+    aic = aic_results, 
+    best_model = best_model,
+    summaries = summaries,
+    var_comps = var_comps)
+}
+
+#Run function and extract stats of interest
+results <- lapply(outcomes, function(outcome) compare_models(outcome, full))
+
+#Printing out to create table
+results[[8]]$anova
+results[[8]]$aic
+results[[8]]$best_model
+results[[8]]$summaries$test_5
+results[[8]]$var_comps$test_5
+#4 just AIC, not sig and no LLT evidence.
+#5 (pre_dorsal) just AIC, not sig and no LLT evidence.
+#6 (pre_ventral) evidence for test 5 mb/fss
+#7 (pos_dorsal) just AIC, not sig and no LLT evidence.
+#8 (pos_ventral) evidence for test 5 mb/fss
+```
+
+If looking at just main effects, it seems that ventral putamen is more associated with mb/fss beahvior.
+
+
+## Examining main effects from test 5
+
+```{r Plotting Main Effects from Test 5}
+test_5 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                 s(fss_resid_z, k = 3, fx = F) +
+                 s(mb_resid_z, k = 3, fx = F) +
+                     s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(test_5)
+gam.vcomp(test_5)
+plot(ggpredict(test_5, terms = c("fss_resid_z")), show_data = TRUE) + scale_y_continuous(transform = "reverse")
+plot(ggpredict(test_5, terms = c("mb_resid_z")), show_data = TRUE) + scale_y_continuous(transform = "reverse")
+```
+
+
+
+
+## Exploratory model using most complex, showing the effect.
+
+```{r Exploratory TV-parameter model}
+test_2b <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+                       s(age, k = 3, fx = F) + 
+                 s(age, by = fss_resid_z, k = 3, fx = F) +
+                 s(age, by = mb_resid_z, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+summary(test_2b)
+gam.vcomp(test_2b)
+plot(ggpredict(test_2b, terms = c("age", "fss_resid_z[-2, -1, 0, 1, 2]"))) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(test_2b, terms = c("age", "mb_resid_z[-2, -1, 0, 1, 2]"))) + scale_y_continuous(trans = "reverse")
+```
+
+This is the model I want to write about in the end here. Can prune MF learning.
+
+
+This set of models focuses on cic atlas. There are 8 rois. I can either focus on putamen or run across the 8. I also think it makes sense just to present the putamen part. That will give a sense specificity in the putamen.
+
+```{r Sensitivity Analyses w/CIC atlas}
+#Pre caudate
+sensitivity_pre_caud <- gam(cic_pre_caudate_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                s(age, by = fss_resid_z, k = 3, fx = FALSE) +
+              s(age, by = mb_resid_z, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(sensitivity_pre_caud)
+plot(ggpredict(sensitivity_pre_caud, 
+               terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(sensitivity_pre_caud, 
+               terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+
+#post caudate
+sensitivity_pos_caud <- gam(cic_pos_caudate_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                s(age, by = fss_resid_z, k = 3, fx = FALSE) +
+                s(age, by = mb_resid_z, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+#summary(test_2$gam)
+summary(sensitivity_pos_caud)
+
+plot(ggpredict(sensitivity_pos_caud, 
+               terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(sensitivity_pos_caud, 
+               terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+
+
+#nacc
+sensitivity_nacc <- gam(cic_nacc_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                s(age, by = fss_resid_z, k = 3, fx = FALSE) +
+                s(age, by = mb_resid_z, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+#summary(test_2$gam)
+summary(sensitivity_nacc)
+
+plot(ggpredict(sensitivity_nacc, 
+               terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(sensitivity_nacc, 
+               terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+
+#pallidum
+sensitivity_pallidum <- gam(cic_pallidum_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                s(age, by = fss_resid_z, k = 3, fx = FALSE) +
+                s(age, by = mb_resid_z, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+#summary(test_2$gam)
+summary(sensitivity_pallidum)
+
+plot(ggpredict(sensitivity_pallidum, 
+               terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(sensitivity_pallidum, 
+               terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+
+#pre dorsal put
+sensitivity_pre_dputamen <- gam(cic_pre_dorsal_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                s(age, by = fss_resid_z, k = 3, fx = FALSE) +
+                s(age, by = mb_resid_z, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+#summary(test_2$gam)
+summary(sensitivity_pre_dputamen)
+
+plot(ggpredict(sensitivity_pre_dputamen, 
+               terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(sensitivity_pre_dputamen, 
+               terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+
+gam.vcomp(sensitivity_pre_dputamen)
+
+extract_vc(sensitivity_pre_dputamen)
+
+#pre ventral put
+sensitivity_pre_vputamen <- gam(cic_pre_ventral_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                s(age, by = fss_resid_z, k = 3, fx = FALSE) +
+                s(age, by = mb_resid_z, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+#summary(test_2$gam)
+summary(sensitivity_pre_vputamen)
+gam.vcomp(sensitivity_pre_dputamen)
+
+plot(ggpredict(sensitivity_pre_vputamen, 
+               terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(sensitivity_pre_vputamen, 
+               terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+
+#post dorsal put
+sensitivity_pos_dputamen <- gam(cic_pos_dorsal_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                s(age, by = fss_resid_z, k = 3, fx = FALSE) +
+                s(age, by = mb_resid_z, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+#summary(test_2$gam)
+summary(sensitivity_pos_dputamen)
+extract_vc(sensitivity_pos_dputamen)
+plot(ggpredict(sensitivity_pos_dputamen, 
+               terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(sensitivity_pos_dputamen, 
+               terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+
+#post ventral put
+sensitivity_pos_vputamen <- gam(cic_pos_ventral_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                s(age, by = fss_resid_z, k = 3,  fx = FALSE) +
+                s(age, by = mb_resid_z, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+#summary(test_2$gam)
+summary(sensitivity_pos_vputamen)
+extract_vc(sensitivity_pos_vputamen)
+plot(ggpredict(sensitivity_pos_vputamen, 
+               terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(sensitivity_pos_vputamen, 
+               terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))) + scale_y_continuous(trans = "reverse")
+```
+
+
+Messing around with balance between gd and habitual control. Worth comparing to w parameter.
+
+```{r Balance between MB and Habit}
+
+
+sensitivity_pre_vputamen <- gam(cic_pos_ventral_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(sensitivity_pre_vputamen)
+#Creating difference scores to see what that looks like.
+full$fssz_mbz_diff <- full$firststagestay_z - full$modelbased_z
+full$fssz_mfz_diff <- full$firststagestay_z - full$modelfree_z
+full$mbz_mfz_diff <- full$modelbased_z - full$modelfree_z
+
+full <- full %>% 
+  mutate(age_group = cut(age,
+                         breaks = c(10,13,17,24,34), 
+                         labels = c("10-13 years", "14-17 years", "18-24 years", "25-34 years"),
+                         include.lowest = TRUE))
+
+full <- full %>% 
+  mutate(put_iron_group = cut(harox_putamen_harm,
+                         breaks = 4))
+
+
+, 
+                         labels = c("10-13 years", "14-17 years", "18-24 years", "25-34 years"),
+                         include.lowest = TRUE
+0.7569   0.7880   0.8394   0.8881   0.9263   0.9853 
+#Note that w is model based vs model free, not habit
+ggplot(full, aes(x = age, y = fss_resid)) + geom_point() + geom_smooth(method = "lm")
+ggplot(full, aes(x = age, y = firststagestay)) + geom_point() + geom_smooth(method = "lm")
+
+ggplot(full, aes(x = firststagestay_z, y = modelbased_z, colour = age)) + geom_point() + geom_smooth() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "orange", size = 1)
+
+ggplot(full, aes(x = firststagestay_z, y = modelfree_z, colour = age)) + geom_point() + geom_smooth() +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "orange", size = 1)
+
+ggplot(full, aes(x = modelbased, y = firststagestay, colour = age_group)) + geom_point() + 
+  geom_smooth(method = "gam",se = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  facet_wrap(~age_group)
+
+ggplot(full, aes(x = mb_resid, y = fss_resid, colour = age_group)) + geom_point() + 
+  geom_smooth(method = "gam", aes(color = age_group), se = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "orange", size = 1)  +
+  facet_wrap(~age_group)
+
+ggplot(full, aes(x = mb_resid, y = fss_resid, colour = age)) + geom_point() + 
+  geom_smooth(method = "gam", aes(color = age)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "orange", size = 1)
+
+
+#calculating the person-level difference score to see what that looks like.
+full <- full %>% 
+  group_by(id) %>%
+  mutate(fssz_mbz_diff_b = mean(fssz_mbz_diff, na.rm = TRUE))
+
+
+ggplot(full, aes(x = age, y = fssz_mbz_diff, group = id)) + 
+  geom_point(alpha = 0.5) + 
+  geom_line(alpha = 0.5) + 
+  geom_smooth(method = "lm", group = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", linewidth = 1) +
+  theme_modern() +
+  labs(x = "Age",
+       y = "FSS - MB (z-scored)")
+
+ggplot(full, aes(x = age, y = fssz_mbz_diff_b, group = id, color = harox_putamen_harm)) + 
+  geom_point() + 
+  #geom_line(alpha = 0.5) + 
+  geom_smooth(method = "lm", group = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  theme_modern() +
+  labs(x = "Age",
+       y = "FSS - MB (z-scored)")
+
+ggplot(full, aes(x = age, y = fssz_mfz_diff, group = id)) + 
+  geom_point(alpha = 0.5) + 
+  geom_line(alpha = 0.5) + 
+  geom_smooth(method = "lm", group = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  theme_modern() +
+  labs(x = "Age",
+       y = "FSS - MF (z-scored)")
+
+ggplot(full, aes(x = age, y = mbz_mfz_diff, group = id)) + 
+  geom_point(alpha = 0.5) + 
+  geom_line(alpha = 0.5) + 
+  geom_smooth(method = "lm", group = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  theme_modern() +
+  labs(x = "Age",
+       y = "MB - MF (z-scored)")
+
+ggplot(full, aes(x = age, y = w, group = id)) + 
+  geom_point(alpha = 0.5) + 
+  geom_line(alpha = 0.5) + 
+  geom_smooth(method = "lm", group = 1) +
+  #geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  theme_modern() +
+  labs(x = "Age",
+       y = "MB - MF (z-scored)")
+
+ggplot(full, aes(x = age, y = modelbased_z, color = pi_z)) + 
+  geom_point() + 
+  #geom_line(alpha = 0.5) + 
+  geom_smooth(method = "lm", group = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  theme_modern() +
+  labs(x = "Age",
+       y = "MB")
+
+#Is this signficant?
+#post caudate
+test <- gam(fssz_mbz_diff ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) +
+                #s(age, by = fss_resid_z, k = 3, fx = FALSE) +
+                #s(age, by = mb_resid_z, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(test)
+plot(ggpredict(test, terms = c("age")))
+
+test1 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = FALSE) + s(fssz_mbz_diff, k = 3, fx = FALSE) +
+               ti(age,fssz_mbz_diff) +
+                #s(age, by = fss_resid_z, k = 3, fx = FALSE) +
+                #s(age, by = mb_resid_z, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(test1)
+plot(ggpredict(test1, terms = c("age", "fssz_mbz_diff[-1,0,1]"))) + scale_y_continuous(transform = "reverse")
+
+
+test2 <- gam(fssz_mbz_diff ~ 1 + sex + visitnum_numeric  +
+                       s(age, k = 3, fx = FALSE) +
+                s(age, by = harox_putamen_harm, k = 3, fx = FALSE) +
+               #s(harox_pallidum_harm, k = 3, fx = F) +
+               #s(cic_pre_dorsal_put_harm, k = 3, fx = F) +
+               #s(cic_pos_dorsal_put_harm, k = 3, fx = F) +
+               s(age, by = harox_caudate_harm, k = 3, fx = F) +
+               #ti(harox_caudate_harm, harox_putamen_harm, k = 3, fx = F) +
+               #s(harox_nacc_harm, k = 3, fx = F) +
+               #s(harox_pallidum_harm, k = 3, fx = F) +
+                #ti(age, harox_putamen_harm, k = 3, fx = FALSE) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(test2)
+plot(ggpredict(test2, terms = c("age","harox_putamen_harm"))) #+ scale_x_continuous(transform = "reverse")
+plot(ggpredict(test2, terms = c("age","harox_caudate_harm"))) + scale_x_continuous(transform = "reverse")
+plot(ggpredict(test2, terms = c("harox_putamen_harm", "harox_caudate_harm"))) + scale_x_continuous(transform = "reverse")
+
+plot(ggpredict(test2, terms = c("harox_nacc_harm"))) + scale_x_continuous(transform = "reverse")
+plot(ggpredict(test2, terms = c("harox_pallidum_harm"))) + scale_x_continuous(transform = "reverse")
+
+plot(ggpredict(test2, terms = c("age", "harox_putamen_harm")))
+plot(ggpredict(test2, terms = c("age")))
+
+ggplot(full, aes(x = harox_putamen_harm, y = fssz_mbz_diff, colour = age_group)) + 
+  geom_point() + 
+  #geom_line(alpha = 0.5) + 
+  geom_smooth(method = "lm", se = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  theme_modern() +
+  labs(x = "Putamen tissue iron",
+       y = "FSS - MB") +
+  scale_x_continuous(transform = "reverse")
+
+ggplot(full, aes(x = age, y = fssz_mbz_diff)) + 
+  geom_point() + 
+  #geom_line(alpha = 0.5) + 
+  geom_smooth(method = "lm", se = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  theme_modern() +
+  labs(x = "Age",
+       y = "FSS - MB")
+
+ggplot(full %>% filter(!is.na(put_iron_group)), aes(x = age, y = fssz_mbz_diff, colour = put_iron_group)) + 
+  geom_point() + 
+  #geom_line(alpha = 0.5) + 
+  geom_smooth(method = "lm", se = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  theme_modern() +
+  labs(x = "Age",
+       y = "FSS - MB")
+
+ggplot(full %>% filter(!is.na(put_iron_group)), aes(x = age, y = fssz_mbz_diff, colour = put_iron_group)) + 
+  geom_point() + 
+  #geom_line(alpha = 0.5) + 
+  geom_smooth(method = "lm", se = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "orange", size = 1) +
+  theme_modern() +
+  labs(x = "Age",
+       y = "FSS - MB")
+```
+
+If score is positive, that indicates that FSS parameter is larger than MB parameter.
+If score is negative, than indicates that MB paramter is larger that FSS parameter.
+If close to 0, that indicates that both strategies are used equally.
+
+# CIC putamen tissue iron trajectory models.
+
+```{r CIC putamen tissue iron trajectory models}
+#Vector of outcomes
+outcomes <- c("cic_pre_caudate_harm", "cic_pos_caudate_harm", "cic_nacc_harm", "cic_pallidum_harm",
+              "cic_pre_dorsal_put_harm", "cic_pre_ventral_put_harm", 
+              "cic_pos_dorsal_put_harm", "cic_pos_ventral_put_harm")
+
+#Function for model comparisons.
+compare_models <- function(outcome, data) {
+  # Dynamically create the model formulas
+  model_1 <- as.formula(paste(outcome, "~ 1 + sex + visitnum_numeric + 
+                              s(age, k = 3, fx = F) + 
+                              s(id_fac, bs = 're')"))
+
+  # Fit the models
+  test_1 <- gam(model_1, method = "REML", data = data)
+  
+  #Extract summary and variance components and plot age smooths
+  summaries <- summary(test_1)
+  var_comps <- gam.vcomp(test_1)
+  plot_age_smooth <- draw(test_1, select = "s(age)")
+  
+  # Return the results
+  list(
+    summaries = summaries,
+    var_comps = var_comps,
+    plot_age_smooth = plot_age_smooth
+    )
+}
+
+#Run function and extract stats of interest
+results <- lapply(outcomes, function(outcome) compare_models(outcome, full))
+
+#Printing out to create table
+results[[8]]$summaries
+results[[8]]$var_comps
+results[[8]]$plot_age_smooth + scale_y_continuous(transform = "reverse")
+```
+

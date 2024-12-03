@@ -1,0 +1,2482 @@
+---
+title: "daw_figures_091024"
+author: "Daniel Petrie"
+date: "2024-09-10"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+WD/Libraries/data
+
+```{r Global}
+library("ggplot2") #For plotting
+library("GGally") #ggpairs()
+library("tidyverse") #Wranglin
+library("dplyr") #Wranglin
+library("interactions")
+library("lme4") #MLM
+library("lmerTest") #p-vals
+library("ggeffects") #For marginal/conditional effects plots
+library("marginaleffects") #For hypothesis_test()
+library("parameters") #Other useful marginal effects functions
+library("gdata") #upperTriangle()
+library("mgcv") #GAMM
+library("ggpubr") #Combining plots
+library("bmlm") #Centering made easy
+library("neuroCombat") #Harminization
+library("LNCDR") #waterfall plot, lunaize plots 
+library("gratia") #mgcv companion package. Using draw among other funcs.
+library("psych") #Descriptives
+library("ggrain") #Raincloud plot
+library("ggseg") #Brain images
+library("ggseg3d") #3d brain images
+library("see") #Theme modern
+library("viridis") #Additional colors
+library("viridisLite") #Additional colors
+library("ggnewscale") #new_scale()
+#library("corrplot") #Corrplot()
+#Working directory (change to something better (onedrive?, something else?) at some point)
+#Hera feels correct at this moment. All files could live in directory R for this project.
+setwd("C:/Users/djpet/OneDrive/Documents/daw_resting_state")
+full <- read.csv("daw_project_081624.csv", header = TRUE)
+```
+
+11475 visit 2 should be removed.
+11498 visit 2 should be removed.
+11589 visit 2 should be removed.
+
+
+Cleaning
+
+
+```{r Cleaning}
+#Creating a different sex variable for some plots/analyses
+full <- full %>%
+  mutate(sex = as.character(sex),
+    sex_p = case_when(
+    sex == "M" ~ "Male",
+    sex == "F" ~ "Female",
+    TRUE ~ sex 
+  ))
+
+#Making visitnum a factor. Can change accordingly
+full$visitnum <- as.factor(full$visitnum)
+
+#Making sex a factor
+full$sex <- as.factor(full$sex)
+
+#Making an ordered factor.
+full$sex_p <- ordered(full$sex_p, levels = (c("Male", "Female")))
+
+#Inverse age for linear models.
+full$inv_age <- 1/full$age
+
+#Checking for duplicate rows due to weird merging situation I put myself in.
+full[which(duplicated(full$modelbased)),c(1:3, 8, 20)] #11475_2/11498_2/11589_2 are duplicates.
+#These ids have duplicated Daw visits, but different rest days. Taking rows with imaging data.
+
+full <- full %>%
+  filter(!(id == "11475" & visitnum == "2") & 
+           !(id == "11498" & visitnum == "2") &
+           !(id == "11589" & visitnum == "2"))
+
+#Treating visitnum as numeric?
+full$visitnum_numeric <- as.numeric(full$visitnum)
+
+#Treating id as factor for og gam fitting
+full$id_fac <- as.factor(full$id)
+
+#Age groups for plotting
+full <- full %>%
+  mutate(age_cat = cut(age,
+                       breaks = c(10,13,17,24,34),
+                       labels = c("10-13 years", "14-17 years", "18-24 years", "25-34 years"),
+                       include.lowest = TRUE))
+```
+
+# List of Figures
+
+**Figure 1: Waterfall plot**
+1)Waterfall plot (N subjects) (red + blue) (Same plot as puberty?)
+(there will also be table 1 here)
+
+**Figure 2: Task Image and Hypothesized MB/MF results**
+2) (TOP): Daw Image and reward probabilities
+3) (Bottom): Hypothetical MB/MF
+
+**Figure 3: Iron distributions, Iron Trajectories, Daw Trajectories**
+4) Raincould plot (Variability of tat2)
+5) Age x tat2 plots
+6) Age x Daw plots
+
+**Figure 4: Main Effect and Interaction plots**
+7) main effect of mb 
+8) main effect of fss
+9) age*mb interaction
+10) age*fss interaction
+
+**Figure 5: CIC atlas Brain pic, Iron distributions, and Age Iron Trajectories**
+11) Brain pictures
+12) Raincould plot (Variability of tat2)
+13) Age x tat2 plots
+
+**Figure 6: Specificity Age x Daw Interactions**
+13) CIC putamen iron ~ age x FSS
+
+**Supplementary Figure 1: Specificity CIC Putamen Model-Based Plots**
+14) CIC putamen iron ~ age x MB
+
+**Supplementary Figure 2: Behavioral Results w/age facet**
+15) Behavioral Results bar charts (in stay_probability script)
+
+**Supplementary Figure 3: Marginal Effects**
+16) Marginal effects from logistic regression model
+
+**Supplementary Figure 3: hBayesDM results**
+17) Mustache plot?
+
+**Supplementary Figure 4: Bivariate associations between perseverance and FSS**
+18) Bivaraite correlation
+19) Age trajectories
+
+
+
+# Figure 1
+
+## Waterfall plot
+
+I want waterfall plot to be 90ish (mess around with this) w x 60 tall
+
+```{r Waterfall plot}
+age_ranked <- waterfall_group(full %>% 
+                                dplyr::select(age, id, sex, study) %>%
+                                filter(complete.cases(.)))
+
+waterfall <- ggplot(data = age_ranked, 
+               aes(x = age, y = age_id, group = age_id)) + 
+  geom_line(aes(group = age_id, color = sex), alpha = .6, linewidth = .5) + 
+  geom_point(aes(shape = sex, color=sex), alpha = .6, size = .5) + 
+  ylab("") + 
+  xlab("Age (years)") + 
+  theme_modern() +
+  theme(axis.title.y = element_blank(), 
+        axis.ticks.y = element_blank(), 
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 6),
+        axis.line.y = element_line(),
+        legend.position=c(.8,.20), 
+        legend.title=element_blank(), 
+        legend.text = element_text(size = 7),
+        axis.title.x = element_text(margin = margin(t = 10, 
+                                                    r = 0, 
+                                                    b = 0, 
+                                                    l = 0),
+                                    size = 7),
+        panel.border = element_blank(),
+        panel.grid.major = element_blank(), # Remove major grid lines
+        panel.grid.minor = element_blank(),
+    axis.line = element_line(size = .2), #Here tomorrow?
+    axis.ticks = element_line(size = .2),
+        axis.ticks.length = unit(0.2, "cm")) +  # Increase x-axis ticks length) + # Remove minor grid lines
+  scale_color_manual(name = "Sex",
+                     values = c("M" = "blue", "F" = "red"),
+                     labels = c("M" = "Male", "F" = "Female")) + # Custom color labels
+  scale_shape_manual(name = "Sex",
+                     values = c("M" = 16, "F" = 17),
+                     labels = c("M" = "Male", "F" = "Female"))
+ 
+
+waterfall
+
+ggsave(filename = "figures/figure_1/waterfall.png", 
+       plot = waterfall,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 70, 
+       height = 60)
+```
+
+# Figure 2
+
+## Simulations for MF
+
+```{r Model Free}
+set.seed(1738)  # for reproducibility
+
+# Create a dataframe with simulated data
+simulated_data_modelfree <- expand.grid(
+  age_cat = c(0, 1),  # Adolescents and Adults
+  commonrare = c("Common", "Rare"),  # Common and Rare
+  moneylag = c("No Reward", "Reward")  # Unrewarded and Rewarded trials
+)
+
+# Function to generate simulated probabilities
+generate_probabilities <- function(age_cat, commonrare, moneylag) {
+  # Probability of first stage stay
+  if (moneylag == "Reward") {
+    # Rewarded trials: higher probability of staying
+    probability_stay <- ifelse(commonrare == "Common", 0.8, 0.8 - 0.05)
+  } else {
+    # Unrewarded trials: lower probability of staying
+    probability_stay <- ifelse(commonrare == "Common", 0.3, 0.3 - 0.05)
+  }
+  
+  return(probability_stay)
+}
+
+# Apply the function to generate probabilities
+simulated_data_modelfree$probability_stay <- mapply(generate_probabilities, simulated_data_modelfree$age_cat, simulated_data_modelfree$commonrare, simulated_data_modelfree$moneylag)
+
+# Add SEM (standard error of the mean) column with a constant value
+simulated_data_modelfree$sem <- 0.03  # Adjust this value as needed
+
+# Print the simulated data
+print(simulated_data_modelfree)
+
+mf <- ggplot(simulated_data_modelfree %>% 
+               filter(complete.cases(.)), 
+             aes(x = factor(moneylag), 
+                 y = probability_stay, 
+                 fill = factor(commonrare))) +
+  geom_bar(stat = "identity", 
+           position = position_dodge(width = 0.9), 
+           width = 0.7) +
+  scale_fill_brewer(palette = "Dark2") +
+  labs(
+    x = "Outcome of Previous Trial",
+    y = "Probability of First-Stage Stay",
+    fill = "Transition type ",
+    title = "Model-Free Learner"
+  ) +
+  theme_modern() +
+     theme(
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.title.x = element_text(size = 8, margin = margin(t=3)),
+    axis.title.y = element_text(size = 8, margin = margin(r=3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_blank(),
+        axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7)
+)
+mf
+
+#ggsave(filename = "figures/daw_task_image/mf_sim.png", 
+#       plot = mf,
+#       device = "png", 
+#       dpi = 500, 
+#       units = "mm",
+#       width = 90, 
+#       height = 60)
+```
+
+
+## Simulations for Model Based
+
+```{r Model Based}
+set.seed(1738)  # for reproducibility
+
+# Create a dataframe with simulated data
+simulated_data_modelbased <- expand.grid(
+  age_cat = c(0, 1),  # Adolescents and Adults
+  commonrare = c("Common", "Rare"),  # Common and Rare
+  moneylag = c("No Reward", "Reward")  # Unrewarded and Rewarded trials
+)
+
+# Function to generate simulated probabilities
+generate_probabilities <- function(age_cat, commonrare, moneylag) {
+  # Probability of first stage stay
+  if (moneylag == "Reward") {
+    # Rewarded trials
+    if (commonrare == "Common") {
+      probability_stay <- 0.8
+    } else {
+      probability_stay <- 0.35
+    }
+  } else {
+    # Unrewarded trials
+    if (commonrare == "Common") {
+      probability_stay <- 0.2
+    } else {
+      probability_stay <- 0.7
+    }
+  }
+  
+  return(probability_stay)
+}
+
+# Apply the function to generate probabilities
+simulated_data_modelbased$probability_stay <- mapply(generate_probabilities, simulated_data_modelbased$age_cat, simulated_data_modelbased$commonrare, simulated_data_modelbased$moneylag)
+
+# Add SEM (standard error of the mean) column with a constant value
+simulated_data_modelbased$sem <- 0.03  # Adjust this value as needed
+
+# Print the simulated data
+print(simulated_data_modelbased)
+
+mb <- ggplot(simulated_data_modelbased %>% 
+               filter(complete.cases(.)), 
+             aes(x = factor(moneylag), 
+                 y = probability_stay, 
+                 fill = factor(commonrare))) +
+  geom_bar(stat = "identity", 
+           position = position_dodge(width = 0.9), 
+           width = 0.7) +
+  scale_fill_brewer(palette = "Dark2") +
+  labs(
+    x = "Outcome of Previous Trial",
+    y = "Probability of First-Stage Stay",
+    fill = "Transition type ",
+    title = "Model-Based Learner"
+  ) +
+  theme_modern() +
+     theme(
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.title.x = element_text(size = 8, margin = margin(t=3)),
+    axis.title.y = element_text(size = 8, margin = margin(r=3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_blank(),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7)
+)
+mb
+
+ggsave(filename = "figures/daw_task_image/mb_sim.png", 
+       plot = mb,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+## Simulating reward probabilities via Gaussian random walks.
+
+```{r Gaussian Random Walks Second Stage}
+# Set parameters
+n_trials <- 200
+n_series <- 4  
+mean_noise <- 0
+sd_noise <- 0.025
+lower_bound <- 0.25
+upper_bound <- 0.75
+
+# Function to simulate one time series
+simulate_series <- function(n_trials, mean_noise, sd_noise, lower_bound, upper_bound) {
+  prob <- numeric(n_trials)
+  prob[1] <- runif(1, lower_bound, upper_bound)  # Initialize first trial
+
+  for (t in 2:n_trials) {
+    prob[t] <- prob[t-1] + rnorm(1, mean_noise, sd_noise)
+    # Reflecting boundaries
+    if (prob[t] > upper_bound) prob[t] <- 2 * upper_bound - prob[t]
+    if (prob[t] < lower_bound) prob[t] <- 2 * lower_bound - prob[t]
+  }
+  
+  return(prob)
+}
+
+# Simulate four time series
+set.seed(1738) #Fetty Wap
+data <- data.frame(
+  trial = rep(1:n_trials, n_series),
+  prob = c(simulate_series(n_trials, mean_noise, sd_noise, lower_bound, upper_bound),
+           simulate_series(n_trials, mean_noise, sd_noise, lower_bound, upper_bound),
+           simulate_series(n_trials, mean_noise, sd_noise, lower_bound, upper_bound),
+           simulate_series(n_trials, mean_noise, sd_noise, lower_bound, upper_bound)),
+  group = factor(rep(c("Group 1", "Group 1", "Group 2", "Group 2"), each = n_trials)),
+  choice = factor(rep(c("Choice 1", "Choice 2", "Choice 1", "Choice 2"), each = n_trials))
+)
+
+# Plot the simulated time series
+reward_probabilities <- ggplot(data, aes(x = trial, y = prob, color = interaction(group,choice))) +
+  geom_line(aes(linetype = group), size = 0.5) +
+  scale_y_continuous(limits = c(0.2, 0.8)) +
+   scale_color_manual(
+    values = c("Group 1.Choice 1" = "#FF0000", 
+               "Group 1.Choice 2" = "#800080", 
+               "Group 2.Choice 1" = "#FF0000", 
+               "Group 2.Choice 2" = "#800080"), # Custom colors
+    labels = c("Red Alien 1", 
+               "Red Alien 2", 
+               "Purple Alien 1", 
+               "Purple Alien 2"),          # Custom labels
+    name = "Group & Choice"                  # Legend title
+  ) +
+  labs(x = "Trial", y = "Probability of Reward", title = "Simulated Reward Probabilities") +
+  theme_modern() +
+    theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 3)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+    ) +
+  guides(
+    color = guide_legend(override.aes = list(linetype = c("solid", "dashed", "solid", "dashed"))),
+    linetype = "none")
+reward_probabilities
+
+ggsave(filename = "figures/daw_task_image/reward_probabilities.png", 
+       plot = reward_probabilities,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+
+# Figure 3
+
+## Iron raincloud
+
+```{r Iron rainclouds}
+#Selecting harmonized tat2 variables to plot. I'll grab inverse as well.
+tat2_harm_inv <- full %>% 
+  dplyr::select("id", "study",
+                "harox_pallidum_harm",
+                "harox_nacc_harm",
+                "harox_putamen_harm", 
+                "harox_caudate_harm")
+
+#Pivot longer for raincloud plot.
+tat2_full_harm <- pivot_longer(tat2_harm_inv, 
+                        cols = starts_with("harox"), 
+                        names_to = "roi", 
+                        values_to = "beta")
+
+#Custom labels
+custom_labels <- c("Ca", 
+                   "NAcc",
+                   "GP", 
+                   "Pu")
+
+#Rainclooud plot for whole sample
+rain <- ggplot(tat2_full_harm %>% 
+         filter(complete.cases(.)), 
+         aes(x = roi,
+             y = beta,
+             fill = roi)) + 
+  geom_rain(alpha = .5,
+            boxplot.args.pos = list(
+              width = 0.05, 
+              position = position_nudge(x = 0.13)),
+            violin.args.pos = list(
+              side = "r",
+              width = 0.7, 
+              position = position_nudge(x = 0.2)),
+            point.args = list(
+              size = 0.3,
+              alpha = 0.2
+            )) +
+  theme_modern() +
+  scale_y_continuous(breaks = c(1.3, 1.2, 1.1, 1.0, 0.9, 
+                                0.8, 0.7, 0.6, 0.5, 0.4), 
+                     trans = "reverse") +
+  scale_fill_brewer(palette = "Dark2") +
+  guides(fill = "none", 
+         color = "none") +
+  labs(x = "ROI", 
+       y = "nT2*w") +
+  scale_x_discrete(labels = custom_labels) +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 3)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+  )
+rain
+
+#Saving
+ggsave(filename = "figures/figure_3/raincloud_harox.png", 
+       plot = rain,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+## Iron trajectories
+
+```{r Iron trajectories} 
+#ggsave(filename = "flux_images/iron_test.pdf", plot = rain, width = 2.5, height = 2.5, dpi = 500)
+#All plotted together over time
+iron_long <- full %>%
+  pivot_longer(cols = c(harox_pallidum_harm, 
+                        harox_caudate_harm, 
+                        harox_nacc_harm,
+                        harox_putamen_harm),
+               names_to = "outcome", 
+               values_to = "value")
+#All in the same plot. Weird because no stars for significance... need to figure that whole thing out.
+#This could also be useful later on?
+#Adding stars for significance
+#stars_df <- data.frame(
+#  x = c(33.2, 33.2, 33.2, 33.2),
+#  y = c(0.92, 0.83, 0.53, 0.80),
+#  outcome = c("Ca", "NAcc", "GP", "Pu"), # Outcomes
+#  star = c("***", "***", "***", "***"),
+#  angle = c(0, 0, 0, 0)# Significance stars
+#)
+
+iron_age <- ggplot(data = iron_long, 
+                   aes(x=age, 
+                       y=value, 
+                       colour = outcome)) + 
+  geom_point(alpha = 0.5,
+             size = 0.5)+
+  geom_line(aes(group = interaction(id, outcome)), 
+            alpha = 0.5,
+            size = 0.5) +
+  theme_modern() + 
+  scale_y_continuous(trans = "reverse") + 
+  geom_smooth(method = "gam", 
+              formula = y ~ s(x, bs = "tp"), 
+              se = TRUE, 
+              aes(group = outcome, 
+                  fill = outcome),
+              alpha = 0.5,
+              linewidth = .5,
+              color = "black") + 
+  labs(x = "Age (years)", 
+       y = "nT2*w") + 
+  scale_color_brewer(palette = "Dark2", 
+                     labels = c("Ca", "NAcc", "GP", "Pu")) + 
+  scale_fill_brewer(palette = "Dark2", 
+                    labels = c("Ca", "NAcc", "GP", "Pu"), guide = FALSE) +
+  theme(
+    legend.position = "none",
+    axis.title.x = element_text(size = 8, margin = margin(t = 3)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2)
+  )
+
+iron_age
+
+
+ggsave(filename = "figures/figure_3/iron_age_harox.png", 
+       plot = iron_age,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+
+## Model-based
+
+
+```{r Model-based}
+mb_age <- ggplot(data = full, 
+               aes(x=age, 
+                   y=modelbased_z, 
+                   group = id)) + 
+  geom_point(alpha = 0.6,
+             size = 0.5) +
+  geom_line(alpha = 0.6,
+            linewidth = 0.5) +
+  theme_modern() +
+  ylim(-3, 3) +
+  stat_smooth(method = "gam",  
+              aes(group = 1), 
+              color = "black", 
+              linewidth = 0.5) +
+  labs(x = "Age (years)", 
+       y = "Parameter Estimate (z-scored)", 
+       title = "Model-Based") +
+#  geom_text(aes(x = 33.7, y = .5, 
+#                label = "***"), 
+#            size = 6,
+#            color = "black",
+#            angle = 90) +
+    theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    plot.title = element_text(size = 8, hjust = 0.5))
+mb_age
+
+ggsave(filename = "figures/figure_3/model_based.png", 
+       plot = mb_age,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 60, 
+       height = 60)
+```
+
+
+## Model-free
+
+
+```{r Model-free}
+mf_age <- ggplot(data = full, 
+               aes(x=age, 
+                   y=modelfree_z, 
+                   group = id)) + 
+  geom_point(alpha = 0.6,
+             size = 0.5) +
+  geom_line(alpha = 0.6,
+            linewidth = 0.5) +
+  theme_modern() +
+  ylim(-3, 3) +
+  stat_smooth(method = "gam",  
+              aes(group = 1), 
+              color = "black", 
+              linewidth = 0.5) +
+  labs(x = "Age (years)", 
+       y = "Parameter Estimate (z-scored)", 
+       title = "Model-Free") +
+#  geom_text(aes(x = 33.7, y = .5, 
+#                label = "***"), 
+#            size = 6,
+#            color = "black",
+#            angle = 90) +
+    theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    plot.title = element_text(size = 8, hjust = 0.5))
+mf_age
+
+ggsave(filename = "figures/figure_3/model_free.png", 
+       plot = mf_age,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 60, 
+       height = 60)
+```
+
+
+## First-stage stay
+
+
+```{r First-stage stay}
+fss_age <- ggplot(data = full, 
+               aes(x=age, 
+                   y=firststagestay_z, 
+                   group = id)) + 
+  geom_point(alpha = 0.6,
+             size = 0.5) +
+  geom_line(alpha = 0.6,
+            linewidth = 0.5) +
+  theme_modern() +
+  ylim(-3, 3) +
+  stat_smooth(method = "gam",  
+              aes(group = 1), 
+              color = "black", 
+              linewidth = 0.5) +
+  labs(x = "Age (years)", 
+       y = "Parameter Estimate (z-scored)", 
+       title = "First-Stage Stay") +
+#  geom_text(aes(x = 33.7, y = .5, 
+#                label = "***"), 
+#            size = 6,
+#            color = "black",
+#            angle = 90) +
+    theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    plot.title = element_text(size = 8, hjust = 0.5))
+fss_age
+
+ggsave(filename = "figures/figure_3/first_stage_stay.png", 
+       plot = fss_age,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 60, 
+       height = 60)
+```
+
+
+# Figure 4
+
+## Main Effects
+
+### Model
+
+```{r s(age) + s(daw)}
+test_5 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                 s(fss_resid_z, k = 3, fx = F) +
+                 s(mb_resid_z, k = 3, fx = F)+
+                     s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(test_5)
+
+#fss margins
+mod_put_me_fss_margins <- ggpredict(test_5, 
+                                     terms = c("fss_resid_z"))
+
+#MB margins
+mod_put_me_mb_margins <- ggpredict(test_5, 
+                                     terms = c("mb_resid_z"))
+```
+
+
+### Plots
+
+#### First-stage stay
+
+```{r First-stage stay}
+#FSS
+p2 <- ggplot() +
+  geom_point(data = full, 
+             aes(x = fss_resid_z, 
+                 y = harox_putamen_harm,
+                 colour = age),
+             alpha = 0.7,
+             size = 0.5) + 
+    scale_color_viridis(option = "G", 
+                      direction = -1, 
+                      alpha = .8,
+                      name = "Age",
+                      guide = guide_colorbar(position = "right")) +
+    geom_smooth(data = mod_put_me_fss_margins,
+              method = "gam",
+              aes(x = x, 
+                  y = predicted,
+                  colour = age), 
+              linewidth = 0.5,
+              fullrange = T,
+              color = "black") +
+  scale_y_continuous(trans = "reverse") +
+  theme_modern() +
+  labs(x = "First-Stage Stay (z-scored)",
+       y = "Putamen nT2*w") +
+    theme(
+    axis.title.x = element_text(size = 8, margin = margin(t=3)),
+    axis.title.y = element_text(size = 8, margin = margin(r=3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+  )
+  
+p2
+
+
+ggsave(filename = "figures/figure_4/me_first_stage_stay.png", 
+       plot = p2,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+#### Model-based
+
+```{r Model-based}
+#MB
+p3 <- ggplot() +
+  geom_point(data = full, 
+             aes(x = mb_resid_z, 
+                 y = harox_putamen_harm,
+                 colour = age),
+             alpha = 0.7,
+             size = 0.5) + 
+    scale_color_viridis(option = "G", 
+                      direction = -1, 
+                      alpha = .8,
+                      name = "Age",
+                      guide = guide_colorbar(position = "right")) +
+    geom_smooth(data = mod_put_me_mb_margins,
+              method = "gam",
+              aes(x = x, 
+                  y = predicted,
+                  colour = age), 
+              linewidth = 0.5,
+              fullrange = T,
+              color = "black") +
+  scale_y_continuous(trans = "reverse") +
+  theme_modern() +
+  labs(x = "Model-Based (z-scored)",
+       y = "Putamen nT2*w") +
+    theme(
+    axis.title.x = element_text(size = 8, margin = margin(t=3)),
+    axis.title.y = element_text(size = 8, margin = margin(r=3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+  )
+  
+p3
+
+ggsave(filename = "figures/figure_4/me_model_based.png", 
+       plot = p3,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+## Interactions
+
+### Model
+
+```{r s(age):Daw}
+mod_put_int <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric  + 
+                 s(age, k = 3, fx = F) +
+                 s(age, by = mb_resid_z, k = 3, fx = F) +
+                 s(age, by = fss_resid_z, k = 3, fx = F) +
+                   s(id_fac, bs = "re"),
+                 method = "REML",
+                 data = full)
+summary(mod_put_int)
+
+#fss margins
+mod_put_int_fss_margins <- ggpredict(mod_put_int, 
+                                     terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))
+
+#MB margins
+mod_put_int_mb_margins <- ggpredict(mod_put_int, 
+                                     terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))
+```
+
+
+### Derivatives
+
+
+```{r Derivatives}
+#Extract derivatives
+d <- derivatives(mod_put_int,
+                 interval = "simultaneous",
+                 n_sim = 10000,
+                 n = 200)
+#Plot derivatives
+draw(d)
+
+#Calculate regions of significance, where CI != 0
+d <- d %>% mutate(sig = !(0>.lower_ci & 0<.upper_ci))
+
+#Split data into s(age) and s(age):FSS
+d_age <- d %>% slice(1:200)
+d_age_mb <- d %>% slice(201:400)
+d_age_fss <- d %>% slice(401:600)
+#Range of significane for age
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(d_age$age[d_age$sig==T]),
+  max(d_age$age[d_age$sig==T]))) 
+
+#Age range of significance for Age:MB
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(d_age_mb$age[d_age_mb$sig==T]),
+  max(d_age_mb$age[d_age_mb$sig==T]))) 
+
+#Age range of significance for Age:FSS
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(d_age_fss$age[d_age_fss$sig==T]),
+  max(d_age_fss$age[d_age_fss$sig==T])))
+
+#Recreated johnson-neyman plot lol
+#ggplot(data = d_age_fss,
+#       aes(x=age,
+#           y = .derivative, 
+#           color=sig, 
+#           ymin=.lower_ci,
+#           ymax=.upper_ci)) + 
+#  geom_ribbon(fill="black",
+#              alpha=.3,
+#              color=NA) + 
+#  geom_line(size=1,
+#            show.legend = F) +
+#  scale_color_manual(values = c("TRUE" = "firebrick",
+#                                "FALSE" = "black")) + 
+#  geom_hline(yintercept = 0,
+#             linetype=2) + 
+#  scale_y_continuous(transform = "reverse")
+```
+
+
+### Plots
+
+#### First-stage stay
+
+```{r first-stage stay}
+#age:fss viridis "D"
+p1 <- ggplot() +
+  geom_point(data = full, 
+             aes(x = age, 
+                 y = harox_putamen_harm, 
+                 color = fss_resid_z, 
+                 group = id),
+             size = 0.5) + 
+  geom_line(data = full, 
+            aes(x = age, 
+                y = harox_putamen_harm, 
+                color = fss_resid_z, 
+                group = id),
+            linewidth = 0.5) +
+  scale_color_viridis(option = "D", 
+                      direction = -1, 
+                      alpha = .6,
+                      name = "",
+                      guide = guide_colorbar(position = "right")) +
+  scale_fill_viridis(option = "D", 
+                     direction = -1, 
+                     alpha = .6) +
+  new_scale_color() +
+  new_scale_fill() +
+  geom_smooth(data = mod_put_int_fss_margins, 
+              aes(x = x, 
+                  y = predicted, 
+                  group = group, 
+                  color = group),
+              method = "gam",
+              linewidth = 0.5) +
+  scale_color_viridis(discrete = TRUE, 
+                      option = "D",
+                      direction = -1, 
+                      guide = "none") + 
+  scale_y_continuous(trans = "reverse") +
+  labs(x = "Age (years)",
+       y = "Putamen nT2*w") + 
+  theme_modern(base_size = 12) +
+  geom_text(aes(x = 29, y = 1.1), 
+            label = expression("s(Age):FSS " * italic(F) * " = 4.34, " * italic(p) * " = 0.01"),
+            size = 1.5, 
+            color = "black") +
+  geom_text(aes(x = 21, y = 0.7),
+            label = "p < 0.05",
+            size = 1.5,
+            color = "black") +
+   geom_text(aes(x = 25.72, y = 0.7),
+            label = "n.s.",
+            size = 1.5,
+            color = "black") +
+  geom_vline(xintercept = 23.37, 
+             linetype = "dashed", 
+             color = "black", 
+             linewidth = 0.5) +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+    )
+p1
+
+ggsave(filename = "figures/figure_4/int_first_stage_stay.png", 
+       plot = p1,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+#### Model-based
+
+```{r Model-based}
+p4 <- ggplot() +
+  geom_point(data = full, 
+             aes(x = age, 
+                 y = harox_putamen_harm, 
+                 color = mb_resid_z, 
+                 group = id),
+             size = 0.5) + 
+  geom_line(data = full, 
+            aes(x = age, 
+                y = harox_putamen_harm, 
+                color = mb_resid_z, 
+                group = id),
+            linewidth = 0.5) +
+  scale_color_viridis(option = "C", 
+                      direction = -1, 
+                      alpha = .6,
+                      name = "",
+                      guide = guide_colorbar(position = "right")) +
+  scale_fill_viridis(option = "C", 
+                     direction = -1, 
+                     alpha = .6) +
+  new_scale_color() +
+  new_scale_fill() +
+  geom_smooth(data = mod_put_int_mb_margins, 
+              aes(x = x, 
+                  y = predicted, 
+                  group = group, 
+                  color = group),
+              method = "gam",
+              linewidth = 0.5) +
+  scale_color_viridis(discrete = TRUE, 
+                      option = "C",
+                      direction = -1, 
+                      guide = "none") + 
+  scale_y_continuous(trans = "reverse") +
+  labs(x = "Age (years)",
+       y = "Putamen nT2*w") + 
+  theme_modern(base_size = 12) +
+  geom_text(aes(x = 29, y = 1.1), 
+            label = expression("s(Age):MB " * italic(F) * " = 4.36, " * italic(p) * " = 0.01"),
+            size = 1.5, 
+            color = "black") +
+  geom_text(aes(x = 19.40, y = 0.7),
+            label = "p < 0.05",
+            size = 1.5,
+            color = "black") +
+   geom_text(aes(x = 23.40, y = 0.7),
+            label = "n.s.",
+            size = 1.5,
+            color = "black") +
+  geom_vline(xintercept = 21.40, 
+             linetype = "dashed", 
+             color = "black", 
+             linewidth = 0.5) +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+    )
+p4
+
+ggsave(filename = "figures/figure_4/int_model_based.png", 
+       plot = p4,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+
+# Figure 5
+
+## Iron raincloud
+
+```{r Iron Raincloud}
+#Using grep to select columns I want.
+columns_to_select <- grep("^(?!.*_z).*cic.*harm|harm.*cic", 
+                          names(full), 
+                          value = TRUE, 
+                          perl = TRUE)
+
+#Subsetting
+tat2_full_harm <- full %>%
+  select(id, visitnum, age, sex, study, all_of(columns_to_select))
+#Pivot longer for raincloud plot.
+tat2_full_long_harm <- pivot_longer(tat2_full_harm, 
+                        cols = starts_with("cic"), 
+                        names_to = "roi", 
+                        values_to = "beta")
+
+custom_labels <- c("PD Putamen", 
+                   "PV Putamen",
+                   "AD Putamen", 
+                   "AV Putamen")
+
+#Rainclooud plot for whole sample
+rain <- ggplot(tat2_full_long_harm %>%
+                 filter(roi == c("cic_pre_dorsal_put_harm", 
+                        "cic_pre_ventral_put_harm", 
+                        "cic_pos_dorsal_put_harm", 
+                        "cic_pos_ventral_put_harm")) %>% 
+                 filter(complete.cases(.)), aes(x = roi, 
+                                                y = beta, 
+                                                fill = roi)) + 
+  geom_rain(alpha = .5,
+            boxplot.args.pos = list(
+              width = 0.05, 
+              position = position_nudge(x = 0.13)),
+            violin.args.pos = list(
+              side = "r",
+              width = 0.7, 
+              position = position_nudge(x = 0.2)),
+            point.args = list(
+              size = 0.3,
+              alpha = 0.2
+            )) +
+  theme_modern() +
+  scale_y_continuous(breaks = c(1.3, 1.2, 1.1, 1.0, 0.9, 
+                                0.8, 0.7, 0.6, 0.5, 0.4), trans = "reverse") +
+  scale_fill_brewer(palette = "Dark2") +
+  guides(fill = "none", color = "none") +
+  labs(x = "ROI", y = "nT2*w") +
+  scale_x_discrete(labels = custom_labels) +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 3)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+  )
+rain
+
+ggsave(filename = "figures/figure_5/cic_putamen_rain.png", 
+       plot = rain,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 109, 
+       height = 60)
+```
+
+
+## Iron trajectories
+
+
+```{r Iron trajectories}
+#Trajectories
+iron_age <- ggplot(data = tat2_full_long_harm %>%
+                 filter(roi == c("cic_pre_dorsal_put_harm", 
+                        "cic_pre_ventral_put_harm", 
+                        "cic_pos_dorsal_put_harm", 
+                        "cic_pos_ventral_put_harm")) %>% 
+                 filter(complete.cases(.)), 
+                   aes(x=age, y=beta, colour = roi)) + 
+  geom_point(size = 0.5, alpha = 0.5)+
+  geom_line(aes(group = interaction(id, roi)), linewidth = 0.5, alpha = 0.5) +
+  theme_modern() + 
+  scale_y_continuous(trans = "reverse") + 
+  geom_smooth(method = "gam", 
+              formula = y ~ s(x, bs = "tp"), 
+              se = TRUE, 
+              aes(group = roi, 
+                  fill = roi),
+              alpha = 0.5,
+              linewidth = .5,
+              color = "black") + 
+  labs(x = "Age (years)", 
+       y = "nT2*w", 
+       color = "ROI: ") + 
+  scale_color_brewer(palette = "Dark2", 
+                     labels = custom_labels) + 
+  scale_fill_brewer(palette = "Dark2", 
+                    labels = custom_labels, guide = FALSE) +
+  theme(legend.position = "none", 
+        strip.text = element_blank())  +
+  theme(
+    legend.position = "none",
+    axis.title.x = element_text(size = 8, margin = margin(t = 3)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2)
+  ) +
+  facet_wrap(~roi)
+
+iron_age
+
+
+ggsave(filename = "figures/figure_5/cic_putamen_trajectories.png", 
+       plot = iron_age,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 109, 
+       height = 60)
+```
+
+# Figure CHANGE (6?)
+
+## Main Effects
+
+### Model
+
+```{r s(age) + s(daw)}
+#pre dorsal put
+sensitivity_pre_dputamen_me <- gam(cic_pre_dorsal_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                s(fss_resid_z, k = 3, fx = F) +
+                s(mb_resid_z, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(sensitivity_pre_dputamen_me)
+
+#Margins
+pre_dput_int_fss_margins_me <- ggpredict(sensitivity_pre_dputamen_me, 
+                                      terms = c("fss_resid_z"))
+
+pre_dput_int_mb_margins_me <- ggpredict(sensitivity_pre_dputamen_me, 
+                                      terms = c("mb_resid_z"))
+
+
+#pre ventral put
+sensitivity_pre_vputamen_me <- gam(cic_pre_ventral_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                s(fss_resid_z, k = 3, fx = F) +
+                s(mb_resid_z, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(sensitivity_pre_vputamen_me)
+
+#Margins
+pre_vput_int_fss_margins_me <- ggpredict(sensitivity_pre_vputamen_me, 
+                                      terms = c("fss_resid_z"))
+
+pre_vput_int_mb_margins_me <- ggpredict(sensitivity_pre_vputamen_me, 
+                                      terms = c("mb_resid_z"))
+#post dorsal put
+sensitivity_pos_dputamen_me <- gam(cic_pos_dorsal_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                s(fss_resid_z, k = 3, fx = F) +
+                s(mb_resid_z, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+
+summary(sensitivity_pos_dputamen_me)
+
+#Margins
+pos_dput_int_fss_margins_me <- ggpredict(sensitivity_pos_dputamen_me, 
+                                      terms = c("fss_resid_z"))
+
+pos_dput_int_mb_margins_me <- ggpredict(sensitivity_pos_dputamen_me, 
+                                      terms = c("mb_resid_z"))
+
+
+#post ventral put
+sensitivity_pos_vputamen_me <- gam(cic_pos_ventral_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                s(fss_resid_z, k = 3, fx = F) +
+                s(mb_resid_z, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+#summary(test_2$gam)
+summary(sensitivity_pos_vputamen_me)
+
+#Margins
+pos_vput_int_fss_margins_me <- ggpredict(sensitivity_pos_vputamen_me, 
+                                      terms = c("fss_resid_z"))
+
+pos_vput_int_mb_margins_me <- ggpredict(sensitivity_pos_vputamen_me, 
+                                      terms = c("mb_resid_z"))
+```
+
+### Plots
+
+#### First-stage stay
+
+```{r First-stage stay}
+#FSS
+q1 <- ggplot() +
+  geom_point(data = full, 
+             aes(x = fss_resid_z, 
+                 y = harox_putamen_harm,
+                 colour = age),
+             alpha = 0.7,
+             size = 0.5) + 
+    scale_color_viridis(option = "G", 
+                      direction = -1, 
+                      alpha = .8,
+                      name = "Age",
+                      guide = guide_colorbar(position = "right")) +
+    geom_smooth(data = pre_dput_int_fss_margins_me,
+              method = "gam",
+              aes(x = x, 
+                  y = predicted,
+                  colour = age), 
+              linewidth = 0.5,
+              fullrange = T,
+              color = "black") +
+  scale_y_continuous(trans = "reverse") +
+  theme_modern() +
+  labs(
+       x = "First-Stage Stay (z-scored)",
+       y = "Anterior Dorsal Putamen nT2*w") +
+    theme(
+    axis.title.x = element_text(size = 8, margin = margin(t=3)),
+    axis.title.y = element_text(size = 8, margin = margin(r=3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+  )
+  
+q1
+
+
+ggsave(filename = "figures/figure_6a/pre_dorsal_me_first_stage_stay.png", 
+       plot = q1,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+
+#FSS
+q2 <- ggplot() +
+  geom_point(data = full, 
+             aes(x = fss_resid_z, 
+                 y = harox_putamen_harm,
+                 colour = age),
+             alpha = 0.7,
+             size = 0.5) + 
+    scale_color_viridis(option = "G", 
+                      direction = -1, 
+                      alpha = .8,
+                      name = "Age",
+                      guide = guide_colorbar(position = "right")) +
+    geom_smooth(data = pre_vput_int_fss_margins_me,
+              method = "gam",
+              aes(x = x, 
+                  y = predicted,
+                  colour = age), 
+              linewidth = 0.5,
+              fullrange = T,
+              color = "black") +
+  scale_y_continuous(trans = "reverse") +
+  theme_modern() +
+  labs(
+       x = "First-Stage Stay (z-scored)",
+       y = "Anterior Ventral Putamen nT2*w") +
+    theme(
+    axis.title.x = element_text(size = 8, margin = margin(t=3)),
+    axis.title.y = element_text(size = 8, margin = margin(r=3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+  )
+  
+q2
+
+ggsave(filename = "figures/figure_6a/pre_ventral_me_first_stage_stay.png", 
+       plot = q2,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+
+#FSS
+q3 <- ggplot() +
+  geom_point(data = full, 
+             aes(x = fss_resid_z, 
+                 y = harox_putamen_harm,
+                 colour = age),
+             alpha = 0.7,
+             size = 0.5) + 
+    scale_color_viridis(option = "G", 
+                      direction = -1, 
+                      alpha = .8,
+                      name = "Age",
+                      guide = guide_colorbar(position = "right")) +
+    geom_smooth(data = pos_dput_int_fss_margins_me,
+              method = "gam",
+              aes(x = x, 
+                  y = predicted,
+                  colour = age), 
+              linewidth = 0.5,
+              fullrange = T,
+              color = "black") +
+  scale_y_continuous(trans = "reverse") +
+  theme_modern() +
+  labs(
+       x = "First-Stage Stay (z-scored)",
+       y = "Posterior Dorsal Putamen nT2*w") +
+    theme(
+    axis.title.x = element_text(size = 8, margin = margin(t=3)),
+    axis.title.y = element_text(size = 8, margin = margin(r=3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+  )
+  
+q3
+
+ggsave(filename = "figures/figure_6a/pos_dorsal_me_first_stage_stay.png", 
+       plot = q3,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+
+
+#FSS
+q4 <- ggplot() +
+  geom_point(data = full, 
+             aes(x = fss_resid_z, 
+                 y = harox_putamen_harm,
+                 colour = age),
+             alpha = 0.7,
+             size = 0.5) + 
+    scale_color_viridis(option = "G", 
+                      direction = -1, 
+                      alpha = .8,
+                      name = "Age",
+                      guide = guide_colorbar(position = "right")) +
+    geom_smooth(data = pos_vput_int_fss_margins_me,
+              method = "gam",
+              aes(x = x, 
+                  y = predicted,
+                  colour = age), 
+              linewidth = 0.5,
+              fullrange = T,
+              color = "black") +
+  scale_y_continuous(trans = "reverse") +
+  theme_modern() +
+  labs(
+       x = "First-Stage Stay (z-scored)",
+       y = "Posterior Ventral Putamen nT2*w") +
+    theme(
+    axis.title.x = element_text(size = 8, margin = margin(t=3)),
+    axis.title.y = element_text(size = 8, margin = margin(r=3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+  )
+  
+q4
+
+ggsave(filename = "figures/figure_6a/pos_ventral_me_first_stage_stay.png", 
+       plot = q4,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+#### Model-based
+
+```{r Model-based}
+#MB
+p3 <- ggplot() +
+  geom_point(data = full, 
+             aes(x = mb_resid_z, 
+                 y = harox_putamen_harm,
+                 colour = age),
+             alpha = 0.7,
+             size = 0.5) + 
+    scale_color_viridis(option = "G", 
+                      direction = -1, 
+                      alpha = .8,
+                      name = "Age",
+                      guide = guide_colorbar(position = "right")) +
+    geom_smooth(data = mod_put_me_mb_margins,
+              method = "gam",
+              aes(x = x, 
+                  y = predicted,
+                  colour = age), 
+              linewidth = 0.5,
+              fullrange = T,
+              color = "black") +
+  scale_y_continuous(trans = "reverse") +
+  theme_modern() +
+  labs(x = "Model-Based (z-scored)",
+       y = "Putamen nT2*w") +
+    theme(
+    axis.title.x = element_text(size = 8, margin = margin(t=3)),
+    axis.title.y = element_text(size = 8, margin = margin(r=3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+  )
+  
+p3
+
+ggsave(filename = "figures/figure_4/me_model_based.png", 
+       plot = p3,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+
+# Figure 6
+
+## Models
+
+Plots depicting age x fss interaction across cic putamen ROIs.
+
+```{r Models}
+#pre dorsal put
+sensitivity_pre_dputamen <- gam(cic_pre_dorsal_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                s(age, by = fss_resid_z, k = 3, fx = F) +
+                s(age, by = mb_resid_z, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(sensitivity_pre_dputamen)
+
+#Margins
+pre_dput_int_fss_margins <- ggpredict(sensitivity_pre_dputamen, 
+                                      terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))
+
+pre_dput_int_mb_margins <- ggpredict(sensitivity_pre_dputamen, 
+                                      terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))
+
+
+#pre ventral put
+sensitivity_pre_vputamen <- gam(cic_pre_ventral_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                s(age, by = fss_resid_z, k = 3, fx = F) +
+                s(age, by = mb_resid_z, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(sensitivity_pre_vputamen)
+
+#Margins
+pre_vput_int_fss_margins <- ggpredict(sensitivity_pre_vputamen, 
+                                      terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))
+
+pre_vput_int_mb_margins <- ggpredict(sensitivity_pre_vputamen, 
+                                      terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))
+#post dorsal put
+sensitivity_pos_dputamen <- gam(cic_pos_dorsal_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                s(age, by = fss_resid_z, k = 3, fx = F) +
+                s(age, by = mb_resid_z, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+
+summary(sensitivity_pos_dputamen)
+
+#Margins
+pos_dput_int_fss_margins <- ggpredict(sensitivity_pos_dputamen, 
+                                      terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))
+
+pos_dput_int_mb_margins <- ggpredict(sensitivity_pos_dputamen, 
+                                      terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))
+
+
+#post ventral put
+sensitivity_pos_vputamen <- gam(cic_pos_ventral_put_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                s(age, by = fss_resid_z, k = 3, fx = F) +
+                s(age, by = mb_resid_z, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+
+#summary(test_2$gam)
+summary(sensitivity_pos_vputamen)
+
+#Margins
+pos_vput_int_fss_margins <- ggpredict(sensitivity_pos_vputamen, 
+                                      terms = c("age", "fss_resid_z[-2,-1,0,1,2]"))
+
+pos_vput_int_mb_margins <- ggpredict(sensitivity_pos_vputamen, 
+                                      terms = c("age", "mb_resid_z[-2,-1,0,1,2]"))
+```
+
+## Derivatives
+
+```{r Specificity Putamen s(age):FSS derivatives}
+#Extract derivatives
+dorsal <- derivatives(sensitivity_pos_dputamen, 
+                 n = 200)
+#Plot derivatives
+draw(dorsal)
+
+#Calculate regions of significance, where CI != 0
+dorsal <- dorsal %>% mutate(sig = !(0>.lower_ci & 0<.upper_ci))
+
+#Split data into s(age) and s(age):FSS
+dorsal_age <- dorsal %>% slice(1:200)
+dorsal_age_fss <- dorsal %>% slice(201:400)
+dorsal_age_mb <- dorsal %>% slice(401:600)
+#Range of significane for age
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(dorsal_age$age[dorsal_age$sig==T]),
+  max(dorsal_age$age[dorsal_age$sig==T]))) 
+
+#Age range of significance for Age:MB
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(dorsal_age_mb$age[dorsal_age_mb$sig==T]),
+  max(dorsal_age_mb$age[dorsal_age_mb$sig==T]))) 
+
+#Age range of significance for Age:FSS
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(dorsal_age_fss$age[dorsal_age_fss$sig==T]),
+  max(dorsal_age_fss$age[dorsal_age_fss$sig==T])))
+
+#ggplot(data = d_age_fss,aes(x=age,y = .derivative, color=sig, ymin=.lower_ci,ymax=.upper_ci)) + #geom_ribbon(fill="black",alpha=.3,color=NA) + geom_line(size=1,show.legend = F) +scale_color_manual(values = c("TRUE" #= "firebrick","FALSE" = "black")) + geom_hline(yintercept = 0,linetype=2) + scale_y_continuous(transform = "reverse")
+
+#Extract derivatives
+ventral <- derivatives(sensitivity_pos_vputamen, 
+                 n = 200)
+#Plot derivatives
+draw(ventral)
+
+#Calculate regions of significance, where CI != 0
+ventral <- ventral %>% mutate(sig = !(0>.lower_ci & 0<.upper_ci))
+
+#Split data into s(age) and s(age):FSS
+ventral_age <- ventral %>% slice(1:200)
+ventral_age_fss <- ventral %>% slice(201:400)
+ventral_age_mb <- ventral %>% slice(401:600)
+#Range of significane for age
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(ventral_age$age[ventral_age$sig==T]),
+  max(ventral_age$age[ventral_age$sig==T]))) 
+
+#Age range of significance for Age:MB
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(ventral_age_mb$age[ventral_age_mb$sig==T]),
+  max(ventral_age_mb$age[ventral_age_mb$sig==T]))) 
+
+#Age range of significance for Age:FSS
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(ventral_age_fss$age[ventral_age_fss$sig==T]),
+  max(ventral_age_fss$age[ventral_age_fss$sig==T])))
+```
+
+
+Age range of significance:
+
+Posterior Dorsal Putamen
+FSS [10.17, 18.62]
+MB  [10.17, 20.24] & [29.63, 33.22]
+
+Posterior Ventral Putamen
+FSS [10.17, 17.35]
+MB  [10.17, 20.71]
+
+
+## Figures
+
+```{r Specificity Putamen s(age):FSS plots}
+#pre dorsal put age:fss "D" virdis color because all FSS
+pre_dorsal_put <- ggplot() +
+  geom_point(data = full, 
+             aes(x = age, 
+                 y = cic_pre_dorsal_put_harm,
+                 color = fss_resid_z, 
+                 group = id),
+             size = 0.5) + 
+  geom_line(data = full, 
+            aes(x = age, 
+                y = cic_pre_dorsal_put_harm, 
+                color = fss_resid_z, 
+                group = id),
+            linewidth = 0.5) +
+  scale_color_viridis(option = "D", 
+                      direction = -1, 
+                      alpha = .6,
+                      name = "",
+                      guide = guide_colorbar(position = "right")) +
+  scale_fill_viridis(option = "D", 
+                     direction = -1, 
+                     alpha = .6) +
+  new_scale_color() +
+  new_scale_fill() +
+  geom_smooth(data = pre_dput_int_fss_margins, 
+              aes(x = x, 
+                  y = predicted, 
+                  group = group, 
+                  color = group), 
+              linewidth = .5) +
+  scale_color_viridis(discrete = TRUE, 
+                      option = "D",
+                      direction = -1, 
+                      guide = "none") + 
+  scale_y_continuous(trans = "reverse",
+                     breaks = c(1.2, 1.1, 1.0, 0.9, 0.8, 0.7, 0.6),
+                     limits = c(1.2, 0.6)) +
+  labs(title = "Anterior Dorsal Putamen",
+       x = "Age (years)",
+       y = "nT2*w") + 
+  theme_modern() +
+  geom_text(aes(x = 28, y = 1.19), 
+            label = expression("s(Age):FSS " * italic(F) * " = 2.27, " * italic(p) * " = 0.11"),
+            size = 2, 
+            color = "black") +
+ # geom_text(aes(x = 16.97, y = 0.7),
+ #           label = "p < 0.05",
+ #           size = 2,
+ #           color = "black") +
+ #  geom_text(aes(x = 20.97, y = 0.7),
+ #           label = "n.s.",
+ #           size = 2,
+ #           color = "black") +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+    )
+pre_dorsal_put
+
+#Saving
+ggsave(filename = "figures/cic_putamen_int_age_fss/cic_ant_dorsal_put_age_fss.png", 
+       plot = pre_dorsal_put,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+
+#pre ventral put age:fss "D" virdis color because all FSS
+pre_ventral_put <- ggplot() +
+  geom_point(data = full, 
+             aes(x = age, 
+                 y = cic_pre_ventral_put_harm,
+                 color = fss_resid_z, 
+                 group = id),
+             size = 0.5) + 
+  geom_line(data = full, 
+            aes(x = age, 
+                y = cic_pre_ventral_put_harm, 
+                color = fss_resid_z, 
+                group = id),
+            linewidth = 0.5) +
+  scale_color_viridis(option = "D", 
+                      direction = -1, 
+                      alpha = .6,
+                      name = "",
+                      guide = guide_colorbar(position = "right")) +
+  scale_fill_viridis(option = "D", 
+                     direction = -1, 
+                     alpha = .6) +
+  new_scale_color() +
+  new_scale_fill() +
+  geom_smooth(data = pre_vput_int_fss_margins, 
+              aes(x = x, 
+                  y = predicted, 
+                  group = group, 
+                  color = group), 
+              linewidth = .5) +
+  scale_color_viridis(discrete = TRUE, 
+                      option = "D",
+                      direction = -1, 
+                      guide = "none") + 
+  scale_y_continuous(trans = "reverse",
+                     breaks = c(1.2, 1.1, 1.0, 0.9, 0.8, 0.7, 0.6),
+                     limits = c(1.2, 0.6)) +
+  labs(title = "Anterior Ventral Putamen",
+       x = "Age (years)",
+       y = "nT2*w") + 
+  theme_modern() +
+  geom_text(aes(x = 28, y = 1.19), 
+            label = expression("s(Age):FSS " * italic(F) * " = 2.71, " * italic(p) * " = 0.07"),
+            size = 2, 
+            color = "black") +
+ # geom_text(aes(x = 16.97, y = 0.7),
+ #           label = "p < 0.05",
+ #           size = 2,
+ #           color = "black") +
+ #  geom_text(aes(x = 20.97, y = 0.7),
+ #           label = "n.s.",
+ #           size = 2,
+ #           color = "black") +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+    )
+pre_ventral_put
+
+#saving
+ggsave(filename = "figures/cic_putamen_int_age_fss/cic_ant_ventral_put_age_fss.png", 
+       plot = pre_ventral_put,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+
+#pos dorsal put age:fss "D" virdis color because all FSS
+pos_dorsal_put <- ggplot() +
+  geom_point(data = full, 
+             aes(x = age, 
+                 y = cic_pos_dorsal_put_harm,
+                 color = fss_resid_z, 
+                 group = id),
+             size = 0.5) + 
+  geom_line(data = full, 
+            aes(x = age, 
+                y = cic_pos_dorsal_put_harm, 
+                color = fss_resid_z, 
+                group = id),
+            linewidth = 0.5) +
+  scale_color_viridis(option = "D", 
+                      direction = -1, 
+                      alpha = .6,
+                      name = "",
+                      guide = guide_colorbar(position = "right")) +
+  scale_fill_viridis(option = "D", 
+                     direction = -1, 
+                     alpha = .6) +
+  new_scale_color() +
+  new_scale_fill() +
+  geom_smooth(data = pos_dput_int_fss_margins, 
+              aes(x = x, 
+                  y = predicted, 
+                  group = group, 
+                  color = group), 
+              linewidth = .5) +
+  scale_color_viridis(discrete = TRUE, 
+                      option = "D",
+                      direction = -1, 
+                      guide = "none") + 
+  scale_y_continuous(trans = "reverse",
+                     breaks = c(1.2, 1.1, 1.0, 0.9, 0.8, 0.7, 0.6),
+                     limits = c(1.2, 0.6)) +
+  labs(title = "Posterior Dorsal Putamen",
+       x = "Age (years)",
+       y = "nT2*w") + 
+  theme_modern() +
+  geom_text(aes(x = 28, y = 1.19), 
+            label = expression("s(Age):FSS " * italic(F) * " = 3.37, " * italic(p) * " = 0.02"),
+            size = 2, 
+            color = "black") +
+  geom_text(aes(x = 16.62, y = 0.65),
+            label = "p < 0.05",
+            size = 2,
+            color = "black") +
+   geom_text(aes(x = 20.62, y = 0.65),
+            label = "n.s.",
+            size = 2,
+            color = "black") +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+    ) +
+  geom_vline(xintercept = 18.62, 
+             linetype = "dashed", 
+             color = "black", 
+             linewidth = .3)
+pos_dorsal_put
+
+
+
+ggsave(filename = "figures/cic_putamen_int_age_fss/cic_pos_dorsal_put_age_fss.png", 
+       plot = pos_dorsal_put,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+
+
+#pos ventral put age:fss "D" virdis color because all FSS
+pos_ventral_put <- ggplot() +
+  geom_point(data = full, 
+             aes(x = age, 
+                 y = cic_pos_ventral_put_harm,
+                 color = fss_resid_z, 
+                 group = id),
+             size = 0.5) + 
+  geom_line(data = full, 
+            aes(x = age, 
+                y = cic_pos_ventral_put_harm, 
+                color = fss_resid_z, 
+                group = id),
+            linewidth = 0.5) +
+  scale_color_viridis(option = "D", 
+                      direction = -1, 
+                      alpha = .6,
+                      name = "",
+                      guide = guide_colorbar(position = "right")) +
+  scale_fill_viridis(option = "D", 
+                     direction = -1, 
+                     alpha = .6) +
+  new_scale_color() +
+  new_scale_fill() +
+  geom_smooth(data = pos_vput_int_fss_margins, 
+              aes(x = x, 
+                  y = predicted, 
+                  group = group, 
+                  color = group), 
+              linewidth = .5) +
+  scale_color_viridis(discrete = TRUE, 
+                      option = "D",
+                      direction = -1, 
+                      guide = "none") + 
+  scale_y_continuous(trans = "reverse",
+                     breaks = c(1.2, 1.1, 1.0, 0.9, 0.8, 0.7, 0.6),
+                     limits = c(1.2, 0.6)) +
+  labs(title = "Posterior Ventral Putamen",
+       x = "Age (years)",
+       y = "nT2*w") + 
+  theme_modern() +
+  geom_text(aes(x = 28, y = 1.19), 
+            label = expression("s(Age):FSS " * italic(F) * " = 3.84, " * italic(p) * " = 0.0124"),
+            size = 2, 
+            color = "black") +
+  geom_text(aes(x = 15.35, y = 0.65),
+            label = "p < 0.05",
+            size = 2,
+            color = "black") +
+   geom_text(aes(x = 19.35, y = 0.65),
+            label = "n.s.",
+            size = 2,
+            color = "black") +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+    ) +
+  geom_vline(xintercept = 17.35, 
+             linetype = "dashed", 
+             color = "black", 
+             linewidth = .3)
+pos_ventral_put
+
+#saving
+ggsave(filename = "figures/cic_putamen_int_age_fss/cic_pos_ventral_put_age_fss.png", 
+       plot = pos_ventral_put,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+
+# Figure S1
+
+## Figures
+
+
+```{r Specificity Putamen s(age):MB plots}
+#pre dorsal put age:MB "C" virdis color because all MB
+pre_dorsal_put <- ggplot() +
+  geom_point(data = full, 
+             aes(x = age, 
+                 y = cic_pre_dorsal_put_harm,
+                 color = mb_resid_z, 
+                 group = id),
+             size = 0.5) + 
+  geom_line(data = full, 
+            aes(x = age, 
+                y = cic_pre_dorsal_put_harm, 
+                color = mb_resid_z, 
+                group = id),
+            linewidth = 0.5) +
+  scale_color_viridis(option = "C", 
+                      direction = -1, 
+                      alpha = .6,
+                      name = "",
+                      guide = guide_colorbar(position = "right")) +
+  scale_fill_viridis(option = "C", 
+                     direction = -1, 
+                     alpha = .6) +
+  new_scale_color() +
+  new_scale_fill() +
+  geom_smooth(data = pre_dput_int_mb_margins, 
+              aes(x = x, 
+                  y = predicted, 
+                  group = group, 
+                  color = group), 
+              linewidth = .5) +
+  scale_color_viridis(discrete = TRUE, 
+                      option = "C",
+                      direction = -1, 
+                      guide = "none") + 
+  scale_y_continuous(trans = "reverse",
+                     breaks = c(1.2, 1.1, 1.0, 0.9, 0.8, 0.7, 0.6),
+                     limits = c(1.2, 0.6)) +
+  labs(title = "Anterior Dorsal Putamen",
+       x = "Age (years)",
+       y = "nT2*w") + 
+  theme_modern() +
+  geom_text(aes(x = 28, y = 1.19), 
+            label = expression("s(Age):MB " * italic(F) * " = 2.27, " * italic(p) * " = 0.11"),
+            size = 2, 
+            color = "black") +
+ # geom_text(aes(x = 16.97, y = 0.7),
+ #           label = "p < 0.05",
+ #           size = 2,
+ #           color = "black") +
+ #  geom_text(aes(x = 20.97, y = 0.7),
+ #           label = "n.s.",
+ #           size = 2,
+ #           color = "black") +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+    )
+pre_dorsal_put
+
+
+
+#saving
+ggsave(filename = "figures/figure_S1/cic_ant_dorsal_put_age_mb.png", 
+       plot = pre_dorsal_put,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+
+#pre ventral put age:MB "C" virdis color because all MB
+pre_ventral_put <- ggplot() +
+  geom_point(data = full, 
+             aes(x = age, 
+                 y = cic_pre_ventral_put_harm,
+                 color = mb_resid_z, 
+                 group = id),
+             size = 0.5) + 
+  geom_line(data = full, 
+            aes(x = age, 
+                y = cic_pre_ventral_put_harm, 
+                color = mb_resid_z, 
+                group = id),
+            linewidth = 0.5) +
+  scale_color_viridis(option = "C", 
+                      direction = -1, 
+                      alpha = .6,
+                      name = "",
+                      guide = guide_colorbar(position = "right")) +
+  scale_fill_viridis(option = "C", 
+                     direction = -1, 
+                     alpha = .6) +
+  new_scale_color() +
+  new_scale_fill() +
+  geom_smooth(data = pre_vput_int_mb_margins, 
+              aes(x = x, 
+                  y = predicted, 
+                  group = group, 
+                  color = group), 
+              linewidth = .5) +
+  scale_color_viridis(discrete = TRUE, 
+                      option = "C",
+                      direction = -1, 
+                      guide = "none") + 
+  scale_y_continuous(trans = "reverse",
+                     breaks = c(1.2, 1.1, 1.0, 0.9, 0.8, 0.7, 0.6),
+                     limits = c(1.2, 0.6)) +
+  labs(title = "Anterior Ventral Putamen",
+       x = "Age (years)",
+       y = "nT2*w") + 
+  theme_modern() +
+  geom_text(aes(x = 28, y = 1.19), 
+            label = expression("s(Age):MB " * italic(F) * " = 2.11, " * italic(p) * " = 0.12"),
+            size = 2, 
+            color = "black") +
+ # geom_text(aes(x = 16.97, y = 0.7),
+ #           label = "p < 0.05",
+ #           size = 2,
+ #           color = "black") +
+ #  geom_text(aes(x = 20.97, y = 0.7),
+ #           label = "n.s.",
+ #           size = 2,
+ #           color = "black") +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+    )
+pre_ventral_put
+
+
+#saving
+ggsave(filename = "figures/figure_S1/cic_ant_ventral_put_age_mb.png", 
+       plot = pre_ventral_put,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+
+#pos ventral put age:MB "C" virdis color because all MB
+pos_ventral_put <- ggplot() +
+  geom_point(data = full, 
+             aes(x = age, 
+                 y = cic_pos_ventral_put_harm,
+                 color = mb_resid_z, 
+                 group = id),
+             size = 0.5) + 
+  geom_line(data = full, 
+            aes(x = age, 
+                y = cic_pos_ventral_put_harm, 
+                color = mb_resid_z, 
+                group = id),
+            linewidth = 0.5) +
+  scale_color_viridis(option = "C", 
+                      direction = -1, 
+                      alpha = .6,
+                      name = "",
+                      guide = guide_colorbar(position = "right")) +
+  scale_fill_viridis(option = "C", 
+                     direction = -1, 
+                     alpha = .6) +
+  new_scale_color() +
+  new_scale_fill() +
+  geom_smooth(data = pos_vput_int_mb_margins, 
+              aes(x = x, 
+                  y = predicted, 
+                  group = group, 
+                  color = group), 
+              linewidth = .5) +
+  scale_color_viridis(discrete = TRUE, 
+                      option = "C",
+                      direction = -1, 
+                      guide = "none") + 
+  scale_y_continuous(trans = "reverse",
+                     breaks = c(1.2, 1.1, 1.0, 0.9, 0.8, 0.7, 0.6),
+                     limits = c(1.2, 0.6)) +
+  labs(title = "Posterior Ventral Putamen",
+       x = "Age (years)",
+       y = "nT2*w") + 
+  theme_modern() +
+  geom_text(aes(x = 28, y = 1.19), 
+            label = expression("s(Age):MB " * italic(F) * " = 4.551, " * italic(p) * " = 0.11"),
+            size = 2, 
+            color = "black") +
+  geom_text(aes(x = 18.31, y = 0.65),
+            label = "p < 0.05",
+            size = 2,
+            color = "black") +
+  geom_text(aes(x = 22.71, y = 0.65),
+            label = "n.s.",
+            size = 2,
+            color = "black") +
+  geom_vline(xintercept = 20.71, 
+             linetype = "dashed", 
+             color = "black", 
+             linewidth = .3) +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 2)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 2)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+    )
+pos_ventral_put
+
+
+#saving
+ggsave(filename = "figures/figure_S1/cic_pos_ventral_put_age_mb.png", 
+       plot = pos_ventral_put,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+
+#pos dorsal put age:MB "C" virdis color because all MB
+pos_dorsal_put <- ggplot() +
+  geom_point(data = full, 
+             aes(x = age, 
+                 y = cic_pos_dorsal_put_harm,
+                 color = mb_resid_z, 
+                 group = id),
+             size = 0.5) + 
+  geom_line(data = full, 
+            aes(x = age, 
+                y = cic_pos_dorsal_put_harm, 
+                color = mb_resid_z, 
+                group = id),
+            linewidth = 0.5) +
+  scale_color_viridis(option = "C", 
+                      direction = -1, 
+                      alpha = .6,
+                      name = "",
+                      guide = guide_colorbar(position = "right")) +
+  scale_fill_viridis(option = "C", 
+                     direction = -1, 
+                     alpha = .6) +
+  new_scale_color() +
+  new_scale_fill() +
+  geom_smooth(data = pos_dput_int_mb_margins, 
+              aes(x = x, 
+                  y = predicted, 
+                  group = group, 
+                  color = group), 
+              linewidth = .5) +
+  scale_color_viridis(discrete = TRUE, 
+                      option = "C",
+                      direction = -1, 
+                      guide = "none") + 
+  scale_y_continuous(trans = "reverse",
+                     breaks = c(1.2, 1.1, 1.0, 0.9, 0.8, 0.7, 0.6),
+                     limits = c(1.2, 0.6)) +
+  labs(title = "Posterior Dorsal Putamen",
+       x = "Age (years)",
+       y = "nT2*w") + 
+  theme_modern() +
+  geom_text(aes(x = 26, y = 1.19), 
+            label = expression("s(Age):MB " * italic(F) * " = 6.39, " * italic(p) * " = 0.002"),
+            size = 2, 
+            color = "black") +
+  geom_text(aes(x = 18, y = 0.65),
+            label = "p < 0.05",
+            size = 2,
+            color = "black") +
+  geom_text(aes(x = 31.59, y = 0.65),
+            label = "p < 0.05",
+            size = 2,
+            color = "black") +
+  geom_text(aes(x = 25, y = 0.65),
+            label = "n.s.",
+            size = 2,
+            color = "black") +
+  geom_vline(xintercept = 20.24, 
+             linetype = "dashed", 
+             color = "black", 
+             linewidth = .3) +
+    geom_vline(xintercept = 29.51, 
+             linetype = "dashed", 
+             color = "black", 
+             linewidth = .3) +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 3)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    legend.text = element_text(size = 6),
+    legend.title = element_text(size = 7),
+    legend.key.size = unit(0.3, "cm")
+    )
+pos_dorsal_put
+
+
+#saving
+ggsave(filename = "figures/figure_S1/cic_pos_dorsal_put_age_mb.png", 
+       plot = pos_dorsal_put,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+# Figure S4
+
+## Bivariate Correlation
+
+```{r}
+#Correlation for plot.
+cor(full$pi, full$firststagestay)
+#plot of bivariate association between pi and FSS.
+biv_habit <- ggplot(full, aes(x = pi, y = firststagestay)) + 
+  geom_point(alpha = 0.5,
+             size = 0.5) + 
+  geom_smooth(method = "gam", 
+              linewidth = 0.5,
+              fullrange = T,
+              color = "black") +
+  theme_modern() +
+  labs(x = "Perseverance",
+       y = "First-Stage Stay",
+       title = "Bivariate Association") +
+   geom_text(aes(x = 2.5, 
+                 y = -1.5),
+            label = "r = 0.91",
+            size = 2,
+            color = "black") +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 3)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    )
+biv_habit
+
+#saving
+#ggsave(filename = "figures/figure_S4/bivariate_plot.png", 
+#       plot = biv_habit,
+#       device = "png", 
+#       dpi = 500, 
+#       units = "mm",
+#       width = 70, 
+#       height = 90)
+
+#For progress report
+ggsave(filename = "figures/figure_S4/bivariate_plot_progress_report.png", 
+       plot = biv_habit,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 45, 
+       height = 60)
+```
+
+## Perseverance Trajectory
+
+```{r}
+pi_age <- ggplot(data = full, 
+               aes(x=age, y=pi,
+                   group = id)) + 
+  geom_point(alpha = 0.7, 
+             size = 0.5) +
+  geom_line(alpha = 0.7, 
+            linewidth = 0.5) +
+  theme_modern() +
+  #ylim(-3, 3) +
+  stat_smooth(method = "gam",  aes(group = 1), color = "black", linewidth = 0.5) +
+  labs(x = "Age (years)", y = "Estimate", title = "Perseverance Trajectory") +
+  theme(
+    axis.title.x = element_text(size = 8, margin = margin(t = 3)),
+    axis.title.y = element_text(size = 8, margin = margin(r = 3)),
+    axis.text.x = element_text(size = 7),
+    axis.text.y = element_text(size = 7),
+    plot.title = element_text(size = 8, hjust = 0.5),
+    axis.line = element_line(size = .2),
+    axis.ticks = element_line(size = .2),
+    )
+pi_age
+
+#ggsave(filename = "figures/figure_S4/pi_age.png", 
+#       plot = pi_age,
+#       device = "png", 
+#       dpi = 500, 
+#       units = "mm",
+#       width = 70, 
+#       height = 90)
+
+#For progress report
+ggsave(filename = "figures/figure_S4/pi_plot_progress_report.png", 
+       plot = pi_age,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 45, 
+       height = 60)
+```
+
+```{r}
+sensitivity_pre_dputamen <- gam(harox_pallidum_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, by = sex, k = 3, fx = F) +
+                #s(age, by = fss_resid_z, k = 3, fx = F) +
+                #s(age, by = mb_resid_z, k = 3, fx = F) +
+                s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = full)
+summary(sensitivity_pre_dputamen)
+
+plot(ggpredict(sensitivity_pre_dputamen, terms = c("age", "sex")))
+
+```
+
