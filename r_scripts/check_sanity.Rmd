@@ -1,0 +1,495 @@
+---
+title: "check"
+author: "Daniel Petrie"
+date: "2024-08-15"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(psych)
+library("magick")
+library("cowplot")
+library(gridExtra)
+library(ggpubr)
+library(lme4)
+library(lmerTest)
+#Working directory
+setwd("C:/Users/djpet/Documents/daw_resting_state")
+
+#Full data so I can extract the correct subjects
+full <- read.csv("daw_project_070324.csv", header = TRUE)
+#Trial level Daw data. I do not need to run the logistic regression models. I only need to run the first part of the cleaning code to calculate the probability of first stage stay on average (i think).
+luna_7t <- read.csv("cleaning/luna_7tbrainmech.csv", header = TRUE)
+luna_pet <- read.csv("cleaning/luna_pet.csv", header = TRUE)
+```
+
+
+Full cleaning.
+
+```{r Full Cleaning}
+#Creating a different sex variable for some plots/analyses
+full <- full %>%
+  mutate(sex = as.character(sex),
+    sex_p = case_when(
+    sex == "M" ~ "Male",
+    sex == "F" ~ "Female",
+    TRUE ~ sex 
+  ))
+
+#Making visitnum a factor. Can change accordingly
+full$visitnum <- as.factor(full$visitnum)
+
+#Making sex a factor
+full$sex <- as.factor(full$sex)
+
+#Making an ordered factor.
+full$sex_p <- ordered(full$sex_p, levels = (c("Male", "Female")))
+
+#Inverse age for linear models.
+full$inv_age <- 1/full$age
+
+#Checking for duplicate rows due to weird merging situation I put myself in.
+full[which(duplicated(full$modelbased)),c(1:3, 8, 20)] #11475_2/11498_2/11589_2 are duplicates.
+#These ids have duplicated Daw visits, but different rest days. Taking rows with imaging data.
+
+full <- full %>%
+  filter(!(id == "11475" & visitnum == "2") & 
+           !(id == "11498" & visitnum == "2") &
+           !(id == "11589" & visitnum == "2"))
+
+#Treating visitnum as numeric?
+full$visitnum_numeric <- as.numeric(full$visitnum)
+```
+
+**Cleaning Daw Behavioral Data**
+
+I am combining to run the logistic model. Then I will separate by study.
+
+```{r Daw Cleaning}
+#Separating id column into "id" and "visit"
+luna_7t <- luna_7t %>%
+  separate(id, c("id", "vdate"))
+
+luna_pet <- luna_pet %>%
+  separate(id, c("id", "vdate"))
+
+#Adding trial number
+luna_7t <- luna_7t %>%
+  group_by(id, vdate) %>%
+  mutate(trial = row_number())
+
+luna_pet <- luna_pet %>%
+  group_by(id, vdate) %>%
+  mutate(trial = row_number())
+
+#Removing id with identical data that was copied across studies.
+luna_pet <- luna_pet %>% group_by(id) %>% filter(id != "11565")
+
+#Adding scanner information. Ashley slack stated that Siemens for 7T, Siemens Biograph mMR PET/MRI for PET. Seems like they only need a binary code situation here, but I will fuss with that during the neuroCombat portion of the code. This will also be useful for seeing which study came from what subje t.
+luna_7t$study <- "7t"
+luna_pet$study <- "PET"
+
+#Similar id's across data sets. Check to make sure it looks correct with visit_info data set.
+same_ids <- intersect(luna_7t$id, luna_pet$id)
+same_ids
+#"10195" ok
+#"10997" ok
+#"11537" ok
+#"11561" ok
+#"11565" Not ok. Tested on same day. Fixed above!
+#"11575" ok
+#"11641" ok
+#"11651"
+#luna_7t %>% filter(id == "11651")
+#luna_pet %>% filter(id == "11651")
+#visit_info %>% filter(id == "11651")
+
+#Combining data. ADD HABIT HERE
+luna_all <- bind_rows(luna_7t, luna_pet)
+
+# compute visit number
+luna_all <- luna_all %>% 
+  group_by(id) %>% 
+  mutate(visitnum = as.integer(factor(vdate, levels = unique(vdate))))
+```
+
+Ok. Now I will mess around with the lagged portion of the code. I need to figure out how to code NA's correctly for 
+
+```{r}
+#Subsetting subject with multiple instances of not responding. There is also two visits to ensure coding is correct.
+#luna_all_sub <- luna_all %>%
+#  filter(id == "11537")
+
+#Creating lagged variables. Add trial
+luna_all <- luna_all %>% 
+  group_by(id, visitnum) %>% 
+  mutate(choice1lag = lag(choice1),
+         choice2lag = lag(choice2),
+         statelag = lag(state),
+         moneylag = lag(money),
+         visitnumlag = lag(visitnum))
+
+# transitional vars...
+luna_all <- luna_all %>% 
+  mutate(commonrare = as.factor(ifelse((choice1lag == 1 & statelag == 2) |
+                                         (choice1lag == 2 & statelag == 3),
+                                       'Common',
+                                       ifelse(choice1lag == 0 & statelag == 0, NA, 'Rare'))), 
+         commonraredummy = ifelse(commonrare=="Common", 
+                                  1, 
+                                  -1), 
+         moneylagdummy = ifelse(moneylag == 1, 
+                                1,
+                                ifelse(commonraredummy == "NA", NA, -1)), 
+         firststagestay = ifelse(choice1 == choice1lag, 
+                                 1,
+                                 ifelse(commonraredummy == "NA", NA, 0)), 
+         stayswitchwinlose = ifelse(firststagestay==1 & moneylag==0, 'lose-stay',
+                             ifelse(firststagestay==1 & moneylag==1, 'win-stay', 
+                                    ifelse(firststagestay==0 & moneylag==0,
+                                           'lose-switch', 
+                                           'win-switch'))))
+
+#luna_all <- luna_all %>% mutate(winswitch = ifelse(stayswitchwinlose== "win-switch",
+#                            1,
+#                            0))
+#luna_all <- luna_all %>% mutate(
+#  winswitch_common = ifelse(commonrare == "Common" & 
+#                            stayswitchwinlose == "win-switch", 
+#                            1,
+#                            0),
+#  winswitch_rare = ifelse(commonrare == "Rare" &
+#                            stayswitchwinlose == "win-switch",
+#                          1,
+#                          0))
+```
+
+Comparing model output.
+
+Combining the data.
+
+```{r Combining Data}
+#Selecting columns of interest from full
+full_sub <- full %>%
+  dplyr::select(id, visitnum, age, study, sex, behave.date)
+
+#Selecting columns of interest from Daw
+#I think I will need firststagestay, moneylag, commonrate
+luna_all_sub <- luna_all %>%
+  dplyr::select(id, visitnum, vdate, trial, moneylag, moneylagdummy, commonrare, commonraredummy, firststagestay) %>%
+  mutate(vdate = as.Date(vdate, format = "%Y%m%d")) %>%
+  rename(behave.date = vdate,
+         visitnum_daw = visitnum)
+
+#Remember to organize by Date. Idea is to make sure that they match up appropiately.
+stay_prob <- merge(luna_all_sub, full_sub, by = c("id", "behave.date"))
+
+#Adding dichotomous age
+#stay_prob <- stay_prob %>%
+#  mutate(age_cat = if_else(age < 18, 0, 1))
+age_bins <- cut(stay_prob$age,
+                breaks = c(10,13,17,24,34),
+                labels = c("10-13 years", "14-17 years", "18-24 years", "25-34 years"),
+                include.lowest = TRUE)
+stay_prob <- stay_prob %>%
+  mutate(age_cat = age_bins)
+```
+
+
+```{r}
+intmodeltoplot <- glmer(firststagestay ~ 1 + commonraredummy*moneylagdummy + 
+                          (commonraredummy*moneylagdummy|id:visitnum),
+                        data=stay_prob,
+                        na.action = na.exclude,
+                        family="binomial",
+                        glmerControl(optimizer = "bobyqa"))
+summary(intmodeltoplot)
+```
+
+```{r}
+#Extracting random effects
+dawranefint <- ranef(intmodeltoplot)
+head(dawranefint$`id:visitnum`)
+
+#dawranefintws <- ranef(intmodeltoplotws)
+#head(dawranefintws$`id:visitnum`)
+
+#Extracting fixed effects
+dawfixedeffectsint <- summary(intmodeltoplot)$coefficients
+dawfixedeffectsint
+
+#dawfixedeffectsintws <- summary(intmodeltoplotws)$coefficients
+#dawfixedeffectsintws
+
+#Creating dataframe consisting of MB/MF/Habit parameter.
+dawsubjecterms <- data.frame(
+  idtemp = row.names(dawranefint$`id:visitnum`), 
+  modelbased = dawranefint$`id:visitnum`$`commonraredummy:moneylagdummy` + 
+    dawfixedeffectsint[4,1], 
+  modelfree = dawranefint$`id:visitnum`$moneylagdummy + 
+    dawfixedeffectsint[3,1],
+  commonrare = dawranefint$`id:visitnum`$commonraredummy + 
+    dawfixedeffectsint[2,1],
+  firststagestay = dawranefint$`id:visitnum`$`(Intercept)` + 
+    dawfixedeffectsint[1,1])
+#,
+#  winswitch = dawranefintws$`id:visitnum`$`(Intercept)` +
+#    dawfixedeffectsintws[1,1])
+  
+#Create id column
+dawsubjecterms$id <- unlist(lapply(strsplit(as.character(dawsubjecterms$idtemp),
+                                            ":"),'[',1))
+#Create visitnum column
+dawsubjecterms$visitnum <- unlist(lapply(strsplit(as.character(dawsubjecterms$idtemp),
+                                                  ":"),'[',2))
+#Checking
+head(dawsubjecterms)
+
+# Selecting variable. Doing explicitly to reorder
+dawsubjecterms <- dawsubjecterms %>% dplyr::select(id, visitnum, modelbased, 
+                                         modelfree, commonrare, 
+                                         firststagestay) 
+
+
+luna_all <- luna_all %>% dplyr::select(id, visitnum, vdate, study) %>% distinct()
+
+
+#Adding visit number number
+#luna_all <- luna_all %>%
+#  mutate(vdate = as.Date(vdate, format = "%Y%m%d")) %>%
+#  group_by(id) %>%
+#  arrange(vdate) %>%
+#  mutate(visitnum = dense_rank(vdate))
+
+#Mergin date information with daw subject terms
+dawsubjecterms <- merge(dawsubjecterms, luna_all, by = c("id", "visitnum"))
+
+#Removing visitnum after merging
+dawsubjecterms <- dawsubjecterms %>% 
+  dplyr::select(!visitnum) %>% 
+  mutate(vdate = as.Date(vdate, format = "%Y%m%d")) %>%
+  rename(behave.date = vdate)
+
+#Subsetting age from full data
+full_age <- full %>% select(id, visitnum, behave.date, age, harox_putamen_harm, sex)
+test <- merge(dawsubjecterms, full_age, by = c("id", "behave.date"), all.x = TRUE)
+
+#Redo visit numbers
+test <- test %>% dplyr::select(!visitnum) %>%
+  group_by(id) %>%
+  arrange(behave.date) %>%
+  mutate(visitnum = dense_rank(behave.date))
+```
+
+```{r}
+ggplot(data = test, 
+               aes(x=age, y=firststagestay, group = id)) + 
+  geom_point(alpha = 0.7) +
+  geom_line(alpha = 0.7) +
+  stat_smooth(method = "lm", aes(group = 1))
+
+#Treating visitnum as numeric?
+test$visitnum_numeric <- as.numeric(test$visitnum)
+
+#Treating id as factor for og gam fitting
+test$id_fac <- as.factor(test$id)
+test_5 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                 s(firststagestay, k = 3, fx = F) +
+                 s(modelbased, k = 3, fx = F)+
+                     s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = test)
+summary(test_5)
+plot(ggpredict(test_5, terms = c("age", "firststagestay"))) + scale_y_continuous(transform = "reverse")
+plot(ggpredict(test_5, terms = c("age", "modelbased"))) + scale_y_continuous(transform = "reverse")
+
+test_6 <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = F) +
+                 s(age, by = firststagestay, k = 3, fx = F) +
+                 s(age, by = modelbased, k = 3, fx = F)+
+                #s(age, by = modelfree, k = 3, fx = F) +
+                     s(id_fac, bs = "re"),
+                     method = "REML",
+                     data = test)
+summary(test_6)
+plot(ggpredict(test_6, terms = c("age", "firststagestay"))) + scale_y_continuous(transform = "reverse")
+plot(ggpredict(test_6, terms = c("age", "modelbased"))) + scale_y_continuous(transform = "reverse")
+```
+
+
+I'm also curious about missing values and whether that depended on a subjects age.
+
+```{r}
+full_age <- full %>% select(id, behave.date, age, sex)
+
+luna_all_sub <- luna_all %>% 
+  mutate(vdate = as.Date(vdate, format = "%Y%m%d")) %>%
+  rename(behave.date = vdate)
+
+test <- merge(luna_all_sub, full_age, by = c("id", "behave.date"), all.x = TRUE)
+
+# Summarize the data and calculate proportions. This is also useful to get a sense of missing responses.
+summary_data <- test %>%
+  group_by(id, visitnum) %>%
+  summarise(count_choice1_0 = sum(choice1 == 0 | choice2 == 0))
+
+#Adding ages
+age_test <- summary_data %>%
+  left_join(test %>% select(id,visitnum,age), by = c("id", "visitnum")) %>% distinct()
+
+ggplot(age_test, aes(x = age, y = count_choice1_0)) +
+  geom_point() +                     # Scatter plot
+  geom_smooth(method = "lm", col = "blue") +  # Regression line
+  labs(title = "Relationship between Age and Count of choice1 == 0",
+       x = "Age",
+       y = "Count of choice1 == 0") +
+  theme_minimal()
+
+summary(lm(count_choice1_0 ~ 1 + age, data = age_test))
+```
+
+It looks like there are no age-related trends in the number of missing trials during the task. In fact, most participants had very little missingness.
+
+
+
+
+
+Another sanity check, would be to re-clean this data and simply remove all instances of no response. The idea would be that the next instance of responding should corospond to the actual last time they chose a rocketship. This would be a sensitivity check in case someone asks about it.
+
+```{r}
+table(luna_all$choice1)
+table(luna_all$choice2)
+1376-925 #925 trials where subject did not respond on stage 1. 451 trials where subjects did not respond on stage 2.
+
+1376/83400 #1.6% of trials are missing.
+
+#Removing trials where subjects did not respond.
+83400-1376 #Looking for 82,024 trials
+
+#Removing trials where choice 1 == 0 and choice 2 == 0.
+luna_all <- luna_all %>%
+  filter(!(choice1 == 0 | choice2 == 0))
+
+#strating with luna all
+#Creating lagged variables. Add trial
+luna_all <- luna_all %>% 
+  group_by(id, visitnum) %>% 
+  mutate(choice1lag = lag(choice1),
+         choice2lag = lag(choice2),
+         statelag = lag(state),
+         moneylag = lag(money),
+         visitnumlag = lag(visitnum))
+
+# transitional vars...
+luna_all <- luna_all %>% 
+  mutate(commonrare = as.factor(ifelse((choice1lag == 1 & statelag == 2) |
+                                         (choice1lag == 2 & statelag == 3),
+                                       'Common',
+                                       'Rare')), 
+         commonraredummy = ifelse(commonrare=="Common", 
+                                  1, 
+                                  -1), 
+         moneylagdummy = ifelse(moneylag == 1, 
+                                1,
+                                -1), 
+         firststagestay = ifelse(choice1 == choice1lag, 
+                                 1,
+                                 0), 
+         stayswitchwinlose = ifelse(firststagestay==1 & moneylag==0, 'lose-stay',
+                             ifelse(firststagestay==1 & moneylag==1, 'win-stay', 
+                                    ifelse(firststagestay==0 & moneylag==0,
+                                           'lose-switch', 
+                                           'win-switch'))))
+
+intmodeltoplot <- glmer(firststagestay ~ 1 + commonraredummy*moneylagdummy + 
+                          (commonraredummy*moneylagdummy|id:visitnum),
+                        data=luna_all,
+                        na.action = na.exclude,
+                        family="binomial",
+                        glmerControl(optimizer = "bobyqa"))
+summary(intmodeltoplot)
+```
+
+
+```{r}
+#Extracting random effects
+dawranefint <- ranef(intmodeltoplot)
+head(dawranefint$`id:visitnum`)
+
+#dawranefintws <- ranef(intmodeltoplotws)
+#head(dawranefintws$`id:visitnum`)
+
+#Extracting fixed effects
+dawfixedeffectsint <- summary(intmodeltoplot)$coefficients
+dawfixedeffectsint
+
+#dawfixedeffectsintws <- summary(intmodeltoplotws)$coefficients
+#dawfixedeffectsintws
+
+#Creating dataframe consisting of MB/MF/Habit parameter.
+dawsubjecterms <- data.frame(
+  idtemp = row.names(dawranefint$`id:visitnum`), 
+  modelbased = dawranefint$`id:visitnum`$`commonraredummy:moneylagdummy` + 
+    dawfixedeffectsint[4,1], 
+  modelfree = dawranefint$`id:visitnum`$moneylagdummy + 
+    dawfixedeffectsint[3,1],
+  commonrare = dawranefint$`id:visitnum`$commonraredummy + 
+    dawfixedeffectsint[2,1],
+  firststagestay = dawranefint$`id:visitnum`$`(Intercept)` + 
+    dawfixedeffectsint[1,1])
+#,
+#  winswitch = dawranefintws$`id:visitnum`$`(Intercept)` +
+#    dawfixedeffectsintws[1,1])
+  
+#Create id column
+dawsubjecterms$id <- unlist(lapply(strsplit(as.character(dawsubjecterms$idtemp),
+                                            ":"),'[',1))
+#Create visitnum column
+dawsubjecterms$visitnum <- unlist(lapply(strsplit(as.character(dawsubjecterms$idtemp),
+                                                  ":"),'[',2))
+#Checking
+head(dawsubjecterms)
+
+# Selecting variable. Doing explicitly to reorder
+dawsubjecterms <- dawsubjecterms %>% dplyr::select(id, visitnum, modelbased, 
+                                         modelfree, commonrare, 
+                                         firststagestay) 
+
+
+luna_all <- luna_all %>% dplyr::select(id, visitnum, vdate, study) %>% distinct()
+
+
+#Adding visit number number
+#luna_all <- luna_all %>%
+#  mutate(vdate = as.Date(vdate, format = "%Y%m%d")) %>%
+#  group_by(id) %>%
+#  arrange(vdate) %>%
+#  mutate(visitnum = dense_rank(vdate))
+
+#Mergin date information with daw subject terms
+dawsubjecterms <- merge(dawsubjecterms, luna_all, by = c("id", "visitnum"))
+
+#Removing visitnum after merging
+dawsubjecterms <- dawsubjecterms %>% 
+  dplyr::select(!visitnum) %>% 
+  mutate(vdate = as.Date(vdate, format = "%Y%m%d")) %>%
+  rename(behave.date = vdate)
+
+#Subsetting age from full data
+full_age <- full %>% select(id, visitnum, behave.date, age, harox_putamen_harm, sex)
+test <- merge(dawsubjecterms, full_age, by = c("id", "behave.date"), all.x = TRUE)
+
+#Redo visit numbers
+test <- test %>% dplyr::select(!visitnum) %>%
+  group_by(id) %>%
+  arrange(behave.date) %>%
+  mutate(visitnum = dense_rank(behave.date))
+```
+
+Ran plots above from this and looks similar enough. 1% missing is not a crazy amount.

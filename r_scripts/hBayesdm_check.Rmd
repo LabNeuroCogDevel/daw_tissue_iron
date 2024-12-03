@@ -1,0 +1,862 @@
+---
+title: "hBayesDM"
+author: "Daniel Petrie"
+date: "2024-04-23"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Libraries/wd()/data
+
+```{r}
+library("ggplot2") #For plotting
+library("GGally") #ggpairs()
+library("tidyverse") #Wranglin
+library("dplyr") #Wranglin
+library("interactions")
+library("lme4") #MLM
+library("lmerTest") #p-vals
+library("ggeffects") #For marginal/conditional effects plots
+library("margins") #For margins() function. Useful for comparing margins from ggeffects
+library("marginaleffects") #For hypothesis_test()
+library("parameters") #Other useful marginal effects functions
+library("gdata") #upperTriangle()
+library("mgcv") #GAMM
+library("ggpubr") #Combining plots
+library("bmlm") #Centering made easy
+library("neuroCombat") #Harminization
+library("LNCDR") #waterfall plot, lunaize plots 
+library("gratia") #mgcv companion package. Using draw among other funcs.
+#library("scales") #For Bart function
+library("psych") #Descriptives
+library("ggrain") #Raincloud plot
+#library("corrplot") #Corrplot()
+#Working directory (change to something better (onedrive?, something else?) at some point)
+#Hera feels correct at this moment. All files could live in directory R for this project.
+setwd("C:/Users/djpet/Documents/daw_resting_state")
+
+#Beh DAW files /Volumes/Hera/Dan/daw/analysis/txt
+luna_7t <- read.csv("luna_7tbrainmech.csv", header = TRUE)
+luna_pet <- read.csv("luna_pet.csv", header = TRUE)
+
+#Demographic files
+#Location on hera. Note that I had to cp into /Hera/Dan/merged_files because of symbolic links.
+#7t /Volumes/Hera/Projects/mMR_PETDA/scripts
+#pet /Volumes/Hera/Projects/7TBrainMech/scripts
+#Look into id's Maria sent...
+#lunaid  alt.lunaid
+#11390    11665
+#11515    11748
+merge_7t <- read.csv("merged_7t.csv", header = TRUE)
+merge_pet <- read.csv("merged_pet.csv", header = TRUE)
+
+#tat2 data
+#/Volumes/Hera/Dan/tat2/out/smry
+tat2_7t <- read.csv("atlas-harox_7t.csv", header = TRUE)
+tat2_pet <- read.csv("atlas-harox_pet.csv", header =TRUE)
+
+#hBayesdm data
+par7 <- read.csv("par7_indpars.csv", header = TRUE)
+```
+
+
+**Cleaning Behavioral Data**
+
+
+```{r}
+#Separating id column into "id" and "visit"
+luna_7t <- luna_7t %>%
+  separate(id, c("id", "vdate"))
+
+luna_pet <- luna_pet %>%
+  separate(id, c("id", "vdate"))
+
+#Adding trial number
+luna_7t <- luna_7t %>%
+  group_by(id, vdate) %>%
+  mutate(trial = row_number())
+
+luna_pet <- luna_pet %>%
+  group_by(id, vdate) %>%
+  mutate(trial = row_number())
+
+#Removing id with identical data that was copied across studies.
+luna_pet <- luna_pet %>% group_by(id) %>% filter(id != "11565")
+
+#Adding age to data sets. 
+#Age related variable names
+merge_7t %>% names %>% grep(value=T,pattern='age')
+merge_7t %>% names %>% grep(value=T,pattern='date')
+merge_pet %>% names %>% grep(value=T,pattern='age')
+merge_pet %>% names %>% grep(value=T,pattern='vdate')
+#I'll use sess.age for 7t. I think sess.age is average age at visit.
+#I'll use age for pet. Not sure what others are getting at.
+merge_7t <- merge_7t %>% dplyr::select(lunaid, 
+                                behave.date, 
+                                behave.age,
+                                sex) %>% rename(id = lunaid,
+                                                     age = behave.age,
+                                                     vdate = behave.date)
+
+merge_pet <- merge_pet %>% dplyr::select(lunaid, 
+                                  behdatestr, 
+                                  age,
+                                  sex) %>% rename(id = lunaid,
+                                                  vdate = behdatestr)
+
+#Making id character variable for merging.
+merge_7t$id <- as.character(merge_7t$id)
+merge_7t$vdate <- as.character(merge_7t$vdate)
+merge_pet$id <- as.character(merge_pet$id)
+merge_pet$vdate <- as.character(merge_pet$vdate)
+
+luna_7t <- left_join(luna_7t, merge_7t, by = c("id", "vdate"))
+luna_pet <- merge(luna_pet, merge_pet, by = c("id", "vdate"))
+
+#Adding scanner information. Ashley slack stated that Siemens for 7T, Siemens Biograph mMR PET/MRI for PET. Seems like they only need a binary code situation here, but I will fuss with that during the neuroCombat portion of the code. This will also be useful for seeing which study came from what subje t.
+luna_7t$scanner <- "Siemens"
+luna_pet$scanner <- "Biograph"
+
+#Combining data. ADD HABIT HERE
+luna_all <- bind_rows(luna_7t, luna_pet)
+
+# compute visit number
+visit_info <- luna_all %>% 
+  dplyr::select(id, vdate) %>% 
+  group_by(id) %>% 
+  distinct() %>% 
+  mutate(visitnum=rank(as.numeric(as.character(vdate))))
+
+#Merge visit number
+luna_all <- merge(luna_all, 
+             visit_info %>% dplyr::select(id, vdate, visitnum), 
+             by=c('id','vdate'))
+
+#Similar id's across data sets. Check to make sure it looks correct with visit_info data set.
+same_ids <- intersect(luna_7t$id, luna_pet$id)
+same_ids
+#"10195" ok
+#"10997" ok
+#"11537" ok
+#"11561" ok
+#"11565" Not ok. Tested on same day. Fixed above!
+#"11575" ok
+#"11641" ok
+#"11651"
+#luna_7t %>% filter(id == "11651")
+#luna_pet %>% filter(id == "11651")
+#visit_info %>% filter(id == "11651")
+
+#Creating lagged variables. Add trial
+luna_all <- luna_all %>% 
+  group_by(id, visitnum) %>% 
+  mutate(choice1lag = lag(choice1),
+         choice2lag = lag(choice2),
+         statelag = lag(state),
+         moneylag = lag(money),
+         visitnumlag = lag(visitnum))
+
+# transitional vars...
+luna_all <- luna_all %>% 
+  mutate(commonrare = as.factor(ifelse((choice1lag == 1 & statelag == 2) |
+                                         (choice1lag == 2 & statelag == 3),
+                                       'common', 
+                                       'rare')), 
+         commonraredummy = ifelse(commonrare=="common", 
+                                  1, 
+                                  -1), 
+         moneylagdummy = ifelse(moneylag == 1, 
+                                1, 
+                                -1), 
+         firststagestay = ifelse(choice1 == choice1lag, 
+                                 1, 
+                                 0), 
+         stayswitchwinlose = ifelse(firststagestay==1 & moneylag==0, 'lose-stay',
+                             ifelse(firststagestay==1 & moneylag==1, 'win-stay', 
+                                    ifelse(firststagestay==0 & moneylag==0,
+                                           'lose-switch', 
+                                           'win-switch'))))
+luna_all <- luna_all %>% mutate(winswitch = ifelse(stayswitchwinlose== "win-switch",
+                            1,
+                            0))
+luna_all <- luna_all %>% mutate(
+  winswitch_common = ifelse(commonrare == "common" & 
+                            stayswitchwinlose == "win-switch", 
+                            1,
+                            0),
+  winswitch_rare = ifelse(commonrare == "rare" &
+                            stayswitchwinlose == "win-switch",
+                          1,
+                          0))
+```
+
+Summary statistics behavioral
+
+```{r}
+luna_all %>% group_by(id, visitnum) %>% summarise(propstay=length(which(firststagestay==1))/n(),ntrials=n())
+
+luna_all %>% group_by(id, visitnum) %>% summarise(propswitch=length(which(winswitch==1))/n(),ntrials=n())
+```
+
+Creating Daw variables involves a few steps.
+
+Fit 2 glm models. One has MB/MF/first stage stay. Second has "winswitch" parameter. Eventually, these will all be merged into same data set with imaging time points.
+
+1. Fit model
+2. Extract fixed and random effects
+3. Use fixed and random effects to create Daw scores.
+
+```{r}
+# models
+intmodeltoplot <- glmer(firststagestay ~ 1 + commonraredummy*moneylagdummy + 
+                          (commonraredummy*moneylagdummy|id:visitnum),
+                        data=luna_all,
+                        family="binomial",
+                        glmerControl(optimizer = "bobyqa"))
+summary(intmodeltoplot)
+
+# models
+intmodeltoplotws <- glmer(winswitch ~ 1 + commonraredummy + 
+                          (1 + commonraredummy|id:visitnum),
+                        data=luna_all,
+                        family="binomial",
+                        glmerControl(optimizer = "bobyqa"))
+summary(intmodeltoplotws)
+
+#This model did not converge. Eigenvalue too large.
+#intmodeltoplot_age <- glmer(firststagestay ~ 1 + age*commonraredummy*moneylagdummy +
+#                          (commonraredummy*moneylagdummy|id:visitnum),
+#                        data=luna_all,
+#                        family="binomial",
+#                        glmerControl(optimizer = "bobyqa"))
+#summary(intmodeltoplot_age)
+
+#Extracting random effects
+dawranefint <- ranef(intmodeltoplot)
+head(dawranefint$`id:visitnum`)
+
+dawranefintws <- ranef(intmodeltoplotws)
+head(dawranefintws$`id:visitnum`)
+
+#Extracting fixed effects
+dawfixedeffectsint <- summary(intmodeltoplot)$coefficients
+dawfixedeffectsint
+
+dawfixedeffectsintws <- summary(intmodeltoplotws)$coefficients
+dawfixedeffectsintws
+
+#Creating dataframe consisting of MB/MF/Habit parameter.
+dawsubjecterms <- data.frame(
+  idtemp = row.names(dawranefint$`id:visitnum`), 
+  modelbased = dawranefint$`id:visitnum`$`commonraredummy:moneylagdummy` + 
+    dawfixedeffectsint[4,1], 
+  modelfree = dawranefint$`id:visitnum`$moneylagdummy + 
+    dawfixedeffectsint[3,1],
+  commonrare = dawranefint$`id:visitnum`$commonraredummy + 
+    dawfixedeffectsint[2,1],
+  firststagestay = dawranefint$`id:visitnum`$`(Intercept)` + 
+    dawfixedeffectsint[1,1],
+  winswitch = dawranefintws$`id:visitnum`$`(Intercept)` +
+    dawfixedeffectsintws[1,1])
+  
+
+dawsubjecterms$id <- unlist(lapply(strsplit(as.character(dawsubjecterms$idtemp),
+                                            ":"),'[',1))
+
+dawsubjecterms$visitnum <- unlist(lapply(strsplit(as.character(dawsubjecterms$idtemp),
+                                                  ":"),'[',2))
+#Checking
+head(dawsubjecterms)
+
+#Some cleaning for plotting
+# age info
+datereduce <- luna_all %>% dplyr::select(id, visitnum, age, sex, scanner) 
+# merge with model terms
+m <- merge(dawsubjecterms,datereduce,by=c('id','visitnum')) %>% distinct() #%>% filter(complete.cases(.))
+
+#Z-scores just in case.
+m <- m %>% mutate(
+  modelfree_z = scale(modelfree),
+  modelbased_z = scale(modelbased),
+  commonrare_z = scale(commonrare),
+  firststagestay_z = scale(firststagestay),
+  winswitch_z = scale(winswitch),
+  modeldiff_z = modelbased_z - modelfree_z
+)
+```
+
+Ok. We now have a data set "m", that has ages and daw parameters at each visit. 
+
+Cleaning rest data
+
+7t: 292 imaging files
+
+PET: 272 imaging files
+
+NOTE: vmPFC list below.
+25 Subgenual ACC (keep)
+24 Ventral ACC (keep)
+32 Rostral ACC (keep)
+14c Posterior medial OFC (?, Ashley kept, but could delete.Keep)
+#14r Rostral posterior medial OFC (remove)
+#14rr (10?) anterior medial OFC (remove)
+14m anterior vmPFC (keep)
+#11m anterior medial OFC (remove)
+
+```{r}
+#Get list of all txt files
+temp_rest <- list.files(path = "C:/Users/djpet/Documents/daw_resting_state/corr_data", 
+                        pattern = "mat",
+                        full.names = TRUE)
+temp_names <- list.files(path = "C:/Users/djpet/Documents/daw_resting_state/corr_data",
+                         pattern = "mat")
+
+#Read all txt files into list
+datalist <- lapply(temp_rest,
+                   FUN = read.table,
+                   header = T)
+
+#Creating row names
+#dput(colnames(datalist[[1]]))
+row_names <- dput(colnames(datalist[[1]]))
+
+#Append row names to list elements
+datalist <- lapply(datalist,
+                   function(x) cbind(x, row_names))
+
+#Creat wide dataframe for each element in list.
+datalist <- lapply(1:length(datalist), 
+                   function(x) (
+                     pivot_wider(datalist[[x]], 
+                                 names_from = row_names, 
+                                 values_from = c("roi1","roi2", 
+                                                 "roi3", "roi4", 
+                                                 "roi5", "roi6", 
+                                                 "roi7", "roi8",
+                                                 "roi9", "roi10"))))
+
+#Creat data frame that is 
+rest_data <- bind_rows(datalist)
+rest_data$tempid <- cbind(temp_names)
+
+
+rest_data <- rest_data %>%
+  separate(tempid, c("id", "vdate"))
+
+# compute visit number
+visit_info_rest <- rest_data %>% 
+  dplyr::select(id, vdate) %>% 
+  group_by(id) %>% 
+  distinct() %>% 
+  mutate(visitnum=rank(as.numeric(as.character(vdate))))
+
+#Merge visit number
+rest_data <- merge(rest_data, 
+             visit_info_rest %>% 
+               dplyr::select(id, vdate, visitnum), 
+             by=c('id','vdate'))
+
+#Subsetting "upper-diagonal" values. No need for autocorrelation/diagonal in this case.
+#Probably more elegant ways of doing this...
+
+rest_data <- rest_data %>% 
+  dplyr::select(c("id", "vdate", "visitnum", 
+           "roi1_roi2", "roi1_roi3", "roi1_roi4", "roi1_roi5", 
+           "roi1_roi6", "roi1_roi7", "roi1_roi8", "roi1_roi9", 
+           "roi1_roi10", 
+           
+           "roi2_roi3", "roi2_roi4", "roi2_roi5", "roi2_roi6", 
+           "roi2_roi7", "roi2_roi8", "roi2_roi9", "roi2_roi10",  
+           
+           "roi3_roi4", "roi3_roi5", "roi3_roi6", 
+           "roi3_roi7", "roi3_roi8", "roi3_roi9", "roi3_roi10",  
+           
+           "roi4_roi5", "roi4_roi6", "roi4_roi7", 
+           "roi4_roi8", "roi4_roi9", "roi4_roi10", 
+           
+           "roi5_roi6", "roi5_roi7", "roi5_roi8", "roi5_roi9", 
+           "roi5_roi10", 
+           
+           "roi6_roi7", "roi6_roi8", "roi6_roi9", "roi6_roi10",  
+           
+           "roi7_roi8", 
+           "roi7_roi9", "roi7_roi10",  
+           
+           "roi8_roi9", 
+           "roi8_roi10",  
+           
+           "roi9_roi10"))
+#Looks correct
+table(matrix(1:10,10,10) %>% upper.tri())
+
+#Rename colums to ROI names.
+#From Hera/Dan/scripts/README.txt (hint CTRL + SHIFT + C) huh?
+#1. NAcc.nii.gz
+#2. Putamen.nii.gz
+#3. Caudate.nii.gz
+#4. SMA 
+#5. dlPFC 
+#6. subgenualACC.nii.gz
+#7. ventralACC.nii.gz
+#8. rostralACC.nii.gz
+#9. postmedofc.nii.gz (this might be OFC actually)
+#10. anteriorvmPFC.nii.gz
+
+rest_data <- rest_data %>% 
+  rename(nacc_put = "roi1_roi2",
+         nacc_ca = "roi1_roi3", 
+         nacc_sma = "roi1_roi4",
+         nacc_dlpfc = "roi1_roi5",
+         nacc_sacc = "roi1_roi6",
+         nacc_vacc = "roi1_roi7",
+         nacc_racc = "roi1_roi8",
+         nacc_pmofc = "roi1_roi9",
+         nacc_avmpfc = "roi1_roi10",
+         
+         put_ca = "roi2_roi3",    
+         put_sma = "roi2_roi4",
+         put_dlpfc = "roi2_roi5",  
+         put_sacc = "roi2_roi6",
+         put_vacc = "roi2_roi7",
+         put_racc = "roi2_roi8",
+         put_pmofc = "roi2_roi9",
+         put_avmpfc = "roi2_roi10",
+         
+         ca_sma = "roi3_roi4",   
+         ca_dlpfc = "roi3_roi5",
+         ca_sacc = "roi3_roi6",
+         ca_vacc = "roi3_roi7", 
+         ca_racc = "roi3_roi8",
+         ca_pmofc = "roi3_roi9",
+         ca_avmpfc = "roi3_roi10",
+         
+         sma_dlpfc = "roi4_roi5",   
+         sma_sacc = "roi4_roi6",
+         sma_vacc = "roi4_roi7",
+         sma_racc = "roi4_roi8",
+         sma_pmofc = "roi4_roi9",
+         sma_avmpfc = "roi4_roi10",
+         
+         dlpfc_sacc = "roi5_roi6",
+         dlpfc_vacc = "roi5_roi7",
+         dlpfc_racc = "roi5_roi8",
+         dlpfc_pmofc = "roi5_roi9",
+         dlpfc_avmpfc = "roi5_roi10",
+         
+         sacc_vacc = "roi6_roi7",  
+         sacc_racc = "roi6_roi8",
+         sacc_pmofc = "roi6_roi9", 
+         sacc_avmpfc = "roi6_roi10", 
+           
+         vacc_racc = "roi7_roi8", 
+         vacc_pmofc = "roi7_roi9", 
+         vacc_avpmc = "roi7_roi10",   
+         
+         racc_pmofc = "roi8_roi9",
+         racc_avpmc = "roi8_roi10", 
+         
+         pmofc_avpmc = "roi9_roi10")
+```
+
+
+**Cleaning time-averaged T2* (tat2) data**
+
+```{r}
+#Column for what study it is
+tat2_7t <- tat2_7t %>%
+  mutate(study = "tat2_7t")
+
+tat2_pet <- tat2_pet %>%
+  mutate(study = "tat2_pet")
+
+#Combining studies
+tat2_full <- rbind(tat2_7t, tat2_pet)
+
+#Separating id column into "id" and "visit"
+tat2_full <- tat2_full %>%
+  separate(subj, c("id", "vdate"))
+
+#Adding visit number number
+tat2_full <- tat2_full %>%
+  mutate(vdate = as.Date(vdate, format = "%Y%m%d")) %>%
+  group_by(id) %>%
+  arrange(vdate) %>%
+  mutate(visitnum = dense_rank(vdate))
+
+#Removing obvious outlier 11487 visit 3
+tat2_full <- tat2_full %>% 
+  group_by(id) %>% 
+  filter(input != "11487_20190516_tat2_novxscl_meant_medvol")
+#Note. tat2_full is good for plotting distributions of tat2 variables in raincloud plot.
+
+
+#Pivot wider (but still technically long data)
+tat2_full_wider <- tat2_full %>%
+  pivot_wider(id_cols = c(id, vdate, visitnum, study,),
+              names_from = roi,
+              values_from = beta)
+
+rest_data <- merge(rest_data, 
+             tat2_full_wider, 
+             by=c('id','visitnum'))
+```
+
+
+**Cleaning hBayesDM data**
+
+
+```{r}
+#Separating id column into "id" and "visit"
+par7 <- par7 %>%
+  separate(subjID, c("id", "vdate"))
+
+#Adding visit number number
+par7 <- par7 %>%
+  mutate(vdate = as.Date(vdate, format = "%Y%m%d")) %>%
+  group_by(id) %>%
+  arrange(vdate) %>%
+  mutate(visitnum = dense_rank(vdate))
+
+rest_data <- merge(rest_data, 
+             par7, 
+             by=c('id','visitnum'))
+```
+
+
+Merge in neuroimaging measures. Keeping code for all versions as sensitivity checks... merge seems to be the least amount of missing, and still 222 people (7t and pet) with 342 observations.
+
+```{r}
+merge_test <- merge(m,
+                rest_data,
+                by = c("id", "visitnum"))
+dim(merge_test)
+length(unique(merge_test$id))
+
+rest_data$visitnum <- as.character(rest_data$visitnum)
+
+left_join_test <- left_join(m,
+                rest_data,
+                by = c("id", "visitnum"))
+dim(left_join_test)
+length(unique(left_join_test$id))
+
+full_join_test <- full_join(m,
+                rest_data,
+                by = c("id", "visitnum"))
+dim(full_join_test)
+length(unique(full_join_test$id))
+```
+
+For now, I will just use "merge_test". Probably worth doing sensitivity check across these data sets when I get the time.
+
+```{r}
+#Calling data "full"
+full <- merge_test
+#full <- full_join_test
+```
+
+
+**Neurocombat**
+
+
+```{r}
+temp_df <- full %>% 
+  dplyr::select("id", "visitnum", "age", "sex", "study", "nacc_put", "nacc_ca", "nacc_sma", "nacc_dlpfc", 
+"nacc_sacc", "nacc_vacc", "nacc_racc", "nacc_pmofc", "nacc_avmpfc", "put_ca", "put_sma", "put_dlpfc", "put_sacc", "put_vacc", 
+"put_racc", "put_pmofc", "put_avmpfc", "ca_sma", 
+"ca_dlpfc", "ca_sacc", "ca_vacc", "ca_racc", "ca_pmofc", "ca_avmpfc", "sma_dlpfc", "sma_sacc", "sma_vacc", "sma_racc", 
+"sma_pmofc", "sma_avmpfc", "dlpfc_sacc", "dlpfc_vacc", 
+"dlpfc_racc", "dlpfc_pmofc", "dlpfc_avmpfc", "sacc_vacc", 
+"sacc_racc", "sacc_pmofc", "sacc_avmpfc", "vacc_racc", 
+"vacc_pmofc", "vacc_avpmc", "racc_pmofc", "racc_avpmc", "pmofc_avpmc","harox_striatum", "harox_nacc", 
+"harox_caudate", "harox_putamen", "harox_pallidum") %>% 
+  drop_na("id", "visitnum", "age", "sex", "study", "nacc_put", "nacc_ca", "nacc_sma", "nacc_dlpfc", 
+"nacc_sacc", "nacc_vacc", "nacc_racc", "nacc_pmofc", "nacc_avmpfc", "put_ca", "put_sma", "put_dlpfc", "put_sacc", "put_vacc", 
+"put_racc", "put_pmofc", "put_avmpfc", "ca_sma", 
+"ca_dlpfc", "ca_sacc", "ca_vacc", "ca_racc", "ca_pmofc", "ca_avmpfc", "sma_dlpfc", "sma_sacc", "sma_vacc", "sma_racc", 
+"sma_pmofc", "sma_avmpfc", "dlpfc_sacc", "dlpfc_vacc", 
+"dlpfc_racc", "dlpfc_pmofc", "dlpfc_avmpfc", "sacc_vacc", 
+"sacc_racc", "sacc_pmofc", "sacc_avmpfc", "vacc_racc", 
+"vacc_pmofc", "vacc_avpmc", "racc_pmofc", "racc_avpmc", "pmofc_avpmc","harox_striatum", "harox_nacc", 
+"harox_caudate", "harox_putamen", "harox_pallidum") %>% 
+  distinct()
+
+##hypothetical combat
+
+temp_df$sex <- gsub("M", "1", temp_df$sex)
+temp_df$sex <- gsub("F", "2", temp_df$sex)
+
+temp_df$study <- gsub("tat2_7t", "1", temp_df$study)
+temp_df$study <- gsub("tat2_pet", "2", temp_df$study)
+
+
+## actual combat 
+
+batch <- as.factor(temp_df$study)
+mod1 <- as.factor(temp_df$sex)
+mod2 <- as.numeric(temp_df$age)
+id <- as.factor(temp_df$id)
+
+mod <- model.matrix(~mod2+mod1)
+
+temp_df_combat <- temp_df %>% 
+  dplyr::select(-id, -study, -sex, -age, -visitnum)
+
+temp_df_combat_t <- temp_df_combat %>% t %>% as.matrix
+
+data.harmonized <- neuroCombat(dat=temp_df_combat_t, batch=batch, mod=mod)
+
+temp_df_combat_t_harmonized <- data.harmonized$dat.combat  
+
+temp_df_combat_harmonized <- temp_df_combat_t_harmonized %>% t %>% as.data.frame
+
+#Append suffix to all columns in harmonized data.
+colnames(temp_df_combat_harmonized) <-
+  paste(colnames(temp_df_combat_harmonized), "_harm", sep = "")
+
+test <- cbind(temp_df, temp_df_combat_harmonized)
+
+full <- full %>% dplyr::select("id", "visitnum", 
+                        "modelbased", "modelfree", "commonrare",
+                        "firststagestay", "winswitch", "modelfree_z", 
+                        "modelbased_z", "commonrare_z", 
+                        "firststagestay_z", "winswitch_z", 
+                        "modeldiff_z","a1", "beta1", "a2", "beta2", "pi", "w", "lambda")
+
+
+#full <- merge(full, test, by = c("id", "visitnum"))
+full <- merge(full, test, by = c("id", "visitnum"), all = TRUE)
+dim(full)
+length(unique(full$id))
+```
+
+Making own data chunk for this to highlight importance. From my understanding, R2* = (1/T2*). So doing that here for analyses.
+
+ In Larsen et al., (2020) he seems to be using R2* for all analyses. So I am doing that.
+ 
+Note that after chatting with Will, it looks like inverse should be taken at voxel level using 3dcalc. Then averaged across the mask. The shape is still similar, but it is not 100% what Bart did. Discuss accordingly.
+ 
+
+```{r}
+#testing inverse tat2
+full$harox_putamen_harm_inv <- 1/full$harox_putamen_harm
+full$harox_nacc_harm_inv <- 1/full$harox_nacc_harm
+full$harox_caudate_harm_inv <- 1/full$harox_caudate_harm
+full$harox_pallidum_harm_inv <- 1/full$harox_pallidum_harm
+```
+
+Centering
+
+```{r}
+##PMC/GMC variables.
+full <- isolate(full, by = "id", 
+        value = c("modelbased", "modelfree", "commonrare", 
+"firststagestay", "winswitch", "modelfree_z", "modelbased_z", 
+"commonrare_z", "firststagestay_z", "winswitch_z", "modeldiff_z", 
+"nacc_put_harm", "nacc_ca_harm", "nacc_sma_harm", "nacc_dlpfc_harm", 
+"nacc_sacc_harm", "nacc_vacc_harm", "nacc_racc_harm", "nacc_pmofc_harm", "nacc_avmpfc_harm", "put_ca_harm", "put_sma_harm", "put_dlpfc_harm", 
+"put_sacc_harm", "put_vacc_harm", "put_racc_harm", "put_pmofc_harm", 
+"put_avmpfc_harm", "ca_sma_harm", "ca_dlpfc_harm", 
+"ca_sacc_harm", "ca_vacc_harm", "ca_racc_harm", "ca_pmofc_harm", 
+"ca_avmpfc_harm", "sma_dlpfc_harm", "sma_sacc_harm", 
+"sma_vacc_harm", "sma_racc_harm", "sma_pmofc_harm", "sma_avmpfc_harm", "dlpfc_sacc_harm", "dlpfc_vacc_harm", "dlpfc_racc_harm", 
+"dlpfc_pmofc_harm", "dlpfc_avmpfc_harm", 
+"sacc_vacc_harm", "sacc_racc_harm", "sacc_pmofc_harm", "sacc_avmpfc_harm", "vacc_racc_harm", "vacc_pmofc_harm", "vacc_avpmc_harm", "racc_pmofc_harm", "racc_avpmc_harm", "pmofc_avpmc_harm", "harox_putamen_harm_inv", 
+                          "harox_nacc_harm_inv",
+                          "harox_caudate_harm_inv",
+                          "harox_pallidum_harm_inv", "a1", "beta1", "a2", "beta2", "pi", "w", "lambda"), 
+which = "both")
+```
+
+Ok now is giant data set.
+
+
+First, I'll look at similarities between daw parameters either from the lagged analyses, or from hBayesDM
+
+```{r}
+#All RL parameters
+ggpairs(full[,c("a1", "beta1", "a2", "beta2", "pi", "w", "lambda","modelbased", "modelfree", "commonrare", 
+"firststagestay", "winswitch")])
+
+#Habit parameters
+full %>% ggplot(aes(x = firststagestay, y = pi)) +
+  geom_point() +
+  stat_smooth(method = "gam", color = "darkblue") +
+  labs(x = "First Stage Stay", y = "Perseverance") +
+  ggtitle("Bivariate Relations between FSS and pi")
+
+#Goal-directed parameters
+full %>% ggplot(aes(x = modelbased, y = w)) +
+  geom_point() +
+  stat_smooth(method = "gam", color = "darkblue") +
+  labs(x = "Model Based", y = "Model-based Weight") +
+  ggtitle("Bivariate Relations between FSS and pi")
+
+#Comparing inverse temp
+full %>% ggplot(aes(x = beta1, y = beta2)) +
+  geom_point() +
+  stat_smooth(method = "lm", color = "darkblue")# +
+  #labs(x = "Model Based", y = "Model-based Weight") +
+  #ggtitle("Bivariate Relations between FSS and pi")
+
+#Comparing learning rates
+full %>% ggplot(aes(x = a1, y = a2)) +
+  geom_point() +
+  stat_smooth(method = "lm", color = "darkblue")# +
+  #labs(x = "Model Based", y = "Model-based Weight") +
+  #ggtitle("Bivariate Relations between FSS and pi")
+
+#ggplot(data = full %>% group_by(id) %>% filter(n() > 1), 
+#       aes(x=age, y=harox_putamen_harm_inv_cw, group = id)) + 
+#  geom_point() +
+#  geom_line() +
+#  theme_bw(base_size = 15) +
+#  stat_smooth(method = "lm",  aes(group = 1), color = "darkblue") +
+#  ggtitle("Within-Person R2* Putamen") 
+```
+
+Looking at trends over age.
+
+```{r}
+#Learning rate
+ggplot(data = full, 
+       aes(x=age, y=a1_cb, group = id)) + 
+  geom_point() +
+  #geom_line() +
+  theme_bw(base_size = 15) +
+  stat_smooth(method = "lm",  aes(group = 1), color = "darkblue") #+
+  #ggtitle("Within-Person R2* Putamen") 
+
+#Learning rate
+ggplot(data = full, 
+       aes(x=age, y=a2_cb, group = id)) + 
+  geom_point() +
+  #geom_line() +
+  theme_bw(base_size = 15) +
+  stat_smooth(method = "lm",  aes(group = 1), color = "darkblue") #+
+  #ggtitle("Within-Person R2* Putamen") 
+
+#Inv Temp
+ggplot(data = full, 
+       aes(x=age, y=beta1, group = id)) + 
+  geom_point() +
+  geom_line() +
+  theme_bw(base_size = 15) +
+  stat_smooth(method = "lm",  aes(group = 1), color = "darkblue") +
+  ggtitle("Within-Person R2* Putamen") 
+
+#Inv Temp
+ggplot(data = full, 
+       aes(x=age, y=beta2, group = id)) + 
+  geom_point() +
+  geom_line() +
+  theme_bw(base_size = 15) +
+  stat_smooth(method = "lm",  aes(group = 1), color = "darkblue") +
+  ggtitle("Within-Person R2* Putamen") 
+
+#perseverance
+ggplot(data = full, 
+       aes(x=age, y=pi, group = id)) + 
+  geom_point() +
+  geom_line() +
+  theme_bw(base_size = 15) +
+  stat_smooth(method = "lm",  aes(group = 1), color = "darkblue") +
+  ggtitle("Within-Person R2* Putamen") 
+
+#mbw
+ggplot(data = full, 
+       aes(x=age, y=w_cb, group = id)) + 
+  geom_point() +
+  geom_line() +
+  theme_bw(base_size = 15) +
+  stat_smooth(method = "lm",  aes(group = 1), color = "darkblue") +
+  ggtitle("Within-Person R2* Putamen") 
+
+#Lambda
+ggplot(data = full, 
+       aes(x=age, y=lambda, group = id)) + 
+  geom_point() +
+  geom_line() +
+  theme_bw(base_size = 15) +
+  stat_smooth(method = "lm",  aes(group = 1), color = "darkblue") +
+  ggtitle("Within-Person R2* Putamen") 
+
+#FC and RL
+full %>% ggplot(aes(x = put_sma_harm, y = pi)) +
+  geom_point() +
+  stat_smooth(method = "gam", color = "darkblue") +
+  #labs(x = "Model Based", y = "Model-based Weight") +
+  ggtitle("Bivariate Relations between FSS and pi")
+
+#DA and RL
+full %>% ggplot(aes(x = harox_pallidum_harm_inv, y = w)) +
+  geom_point() +
+  stat_smooth(method = "gam", color = "darkblue")
+
+#"put_ca_harm", "put_sma_harm", "put_dlpfc_harm", 
+#"put_sacc_harm", "put_vacc_harm", "put_racc_harm", "put_pmofc_harm", 
+#"put_avmpfc_harm"
+
+
+t <- gamm(pi ~ 1 + sex + visitnum +
+            s(age, k = 3, fx = TRUE) +
+            s(put_avmpfc_harm_cb, k = 3, fx = TRUE) 
+            +s(harox_putamen_harm_inv_cb, k = 3, fx = TRUE)
+          , 
+               random = list(id = ~1), 
+                       method = "REML", 
+                       data = full)
+summary(t$gam)
+draw(t$gam)
+#lunaize(plot(ggpredict(t$gam,
+#               terms = c(" harox_putamen_harm_inv",
+#                         "age"))))
+```
+
+```{r}
+ggpairs(full[,c("a1", "beta1", "a2", "beta2", "pi", "w", "lambda",
+                "harox_putamen_harm_inv_cb",
+                "put_sma_harm_cb", 
+                "put_dlpfc_harm_cb",
+                "put_sacc_harm_cb",        
+                "put_vacc_harm_cb",
+                "put_racc_harm_cb",         
+                "put_pmofc_harm_cb",       
+                "put_avmpfc_harm_cb")])
+```
+
+Ok. It appears that there are some relations between FC and the RL parameters. Worth looking at 
+
+```{r}
+#Treating visitnum as numeric?
+full$visitnum <- as.numeric(full$visitnum)
+#a path, indirect effect
+m2 <- lm(harox_putamen_harm_inv_cb ~ 1 + sex + visitnum +
+            pi_cb, 
+          #method = "REML", 
+          data = full %>% filter(complete.cases(.)))
+summary(m2)
+
+m3 <- lm(put_sma_harm_cb ~ 1 + sex + visitnum + pi_cb +
+            harox_putamen_harm_inv_cb, 
+            #harox_putamen_harm_inv,
+          #method = "REML", 
+          data = full %>% filter(complete.cases(.)))
+summary(m3)
+
+#Note that visitnum messes things up. Perhaps change to factor/numeric?
+#Testing moderated mediation models. Looking at "high habit" people.
+#high_habit <- mean(full$firststagestay_z) - sd(full$firststagestay_z)
+
+testing <- mediation::mediate(m2, m3, 
+                              treat = "pi_cb",
+                   mediator = "harox_putamen_harm_inv_cb", 
+                   boot = T, 
+                   sims = 100)
+summary(testing)
+plot(testing)
+```
+
+avmPFC worked at between-person level.
+?sma?

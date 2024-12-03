@@ -1,0 +1,1008 @@
+---
+title: "daw_analyses_061224"
+author: "Daniel Petrie"
+date: "2024-06-12"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+WD/Libraries/data
+
+```{r Global eval=FALSE}
+library("ggplot2") #For plotting
+library("GGally") #ggpairs()
+library("tidyverse") #Wranglin
+library("dplyr") #Wranglin
+library("interactions")
+library("lme4") #MLM
+library("lmerTest") #p-vals
+library("ggeffects") #For marginal/conditional effects plots
+#library("margins") #For margins() function. Useful for comparing margins from ggeffects
+library("marginaleffects") #For hypothesis_test()
+library("parameters") #Other useful marginal effects functions
+library("gdata") #upperTriangle()
+library("mgcv") #GAMM
+library("ggpubr") #Combining plots
+library("bmlm") #Centering made easy
+library("neuroCombat") #Harminization
+library("LNCDR") #waterfall plot, lunaize plots 
+library("gratia") #mgcv companion package. Using draw among other funcs.
+#library("scales") #For Bart function
+library("psych") #Descriptives
+library("ggrain") #Raincloud plot
+#library("corrplot") #Corrplot()
+#Working directory (change to something better (onedrive?, something else?) at some point)
+#Hera feels correct at this moment. All files could live in directory R for this project.
+setwd("C:/Users/djpet/Documents/daw_resting_state")
+full <- read.csv("daw_project_060524.csv", header = TRUE)
+```
+
+11475 visit 2 should be removed.
+11498 visit 2 should be removed.
+11589 visit 2 should be removed.
+
+
+Cleaning
+
+
+```{r Cleaning}
+#Creating a different sex variable for some plots/analyses
+full <- full %>%
+  mutate(sex = as.character(sex),
+    sex_p = case_when(
+    sex == "M" ~ "Male",
+    sex == "F" ~ "Female",
+    TRUE ~ sex 
+  ))
+
+#Making visitnum a factor. Can change accordingly
+full$visitnum <- as.factor(full$visitnum)
+
+#Making sex a factor
+full$sex <- as.factor(full$sex)
+
+#Making an ordered factor.
+full$sex_p <- ordered(full$sex_p, levels = (c("Male", "Female")))
+
+#Inverse age for linear models.
+full$inv_age <- 1/full$age
+
+#Checking for duplicate rows due to weird merging situation I put myself in.
+full[which(duplicated(full$modelbased)),c(1:3, 8, 20)] #11475_2/11498_2/11589_2 are duplicates.
+#These ids have duplicated Daw visits, but different rest days. Taking rows with imaging data.
+
+full <- full %>%
+  filter(!(id == "11475" & visitnum == "2") & 
+           !(id == "11498" & visitnum == "2") &
+           !(id == "11589" & visitnum == "2"))
+
+#Treating visitnum as numeric?
+full$visitnum_numeric <- as.numeric(full$visitnum)
+
+#Residualizing out age effects in Daw variables.
+#can be removed.
+fss_resid <- lm(firststagestay ~ 1 + age, data = full, na.action = na.exclude)
+full$fss_resid <- resid(fss_resid)
+full$fss_resid_z <- scale(full$fss_resid)
+
+mb_resid <- lm(modelbased ~ 1 + age, data = full, na.action = na.exclude)
+full$mb_resid <- resid(mb_resid)
+full$mb_resid_z <- scale(full$mb_resid)
+
+mf_resid <- lm(modelfree ~ 1 + age, data = full, na.action = na.exclude)
+full$mf_resid <- resid(mf_resid)
+full$mf_resid_z <- scale(full$mf_resid)
+
+
+put_resid <- lm(harox_putamen_harm ~ 1 + age, data = full, na.action = na.exclude)
+full$harox_putamen_harm_resid <- resid(put_resid)
+full$harox_putamen_harm_resid_z <- scale(full$harox_putamen_harm_resid)
+```
+
+NOTE: Zero-order correlations, means, SD, of all study variables will be done in another script. ML LR results of the analytic sample, as well as general behavioral results have been conducted in another script. The purpose of this script is to analyze the Daw RL parameters, iron measures, and age. I can also add the cic atlas analyses here to be included in the supplement.
+
+
+# **Data Analyses Plan**
+
+
+## **Replication Analyses**
+
+
+We replicate previous work examining age trajectories of nT2*w in the NAcc, globus pallidus, caudate, and putamen (CITE). We used four separate generalized additive mixed models that were specified as follows:
+
+
+$$
+
+nT2^*w_{i,t} = \beta_0 + \beta_1{sex}_{i} + \beta_2{visit}_{i,t} + f(\text{age}_{i,t}) + b_{0i} + \epsilon_{i,t}, \quad e \sim N(0,\sigma^2)   
+
+$$
+where $$nT2^*w_{i,t}$$ is the iron value for person $$i$$ on visit $$t$$. $$\beta_0$$ is the overall intercept of $$nT2*w$$, $$\beta_1$$ and $$\beta_2$$ are covariates for sex assigned at birth and visit number, respectively. $$f$$ represents a smooth function of age for the $$t$$-th repeated measure of the $$i$$-th individual. $$b_{0i}$$ represents the random intercept term for the $$i$$-th individual. All models were fit with 3 knots (i.e., k = 3) and unpenalized splines (i.e., all smoothing parameters are fixed to 0; fx = TRUE). We applied the Bonferroni correction to account for multiple comparisons ($$\alpha < 0.0125$$ uncorrected).
+
+
+## Fitting the GAMMs and adjusting for multiple comparrisons.
+
+
+```{r nT2*w ~ s(age) results}
+#pallidum
+pallidum_age <- gamm(harox_pallidum_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "REML",
+                     data = full)
+summary(pallidum_age$lme)
+summary(pallidum_age$gam)
+
+#Figure
+draw(pallidum_age) +  scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(pallidum_age$gam)$s.table[4] < 0.05/4
+
+#Nacc
+nacc_age <- gamm(harox_nacc_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "REML",
+                     data = full)
+summary(nacc_age$lme)
+summary(nacc_age$gam)
+
+#Figure
+draw(nacc_age) +  scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(nacc_age$gam)$s.table[4] < 0.05/4
+
+#caudate
+ca_age <- gamm(harox_caudate_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "REML",
+                     data = full)
+summary(ca_age$lme)
+summary(ca_age$gam)
+
+#Figure
+draw(ca_age) +  scale_y_continuous(trans = "reverse")
+
+#Interesting shape to plot derivative (i.e., not a line)
+draw(derivatives(ca_age)) + scale_y_continuous(trans = "reverse") 
+
+#P-value test
+summary(ca_age$gam)$s.table[4] < 0.05/4
+
+#putamen
+put_age <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "REML",
+                     data = full)
+summary(put_age$lme)
+summary(put_age$gam)
+
+#Figure
+draw(put_age) +  scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(put_age$gam)$s.table[4] < 0.05/4
+```
+
+
+**All age smooths are significantly different than 0. Additionally, they are all positively associated with nT2*w such that as age increases, nT2*w increases.**
+
+
+## **Associations between RL parameters and age**
+
+
+Next, we examined the age trajectories of the RL parameters derived from the multilevel logistic regression model. We replicate previous work showing that the model based parameter increased across age (Decker et al., YEAR). Additionally, we examined age trajectories of the model free parameter and the first stage stay parameter. We used three separate generalized additive mixed models that were specified as follows:
+
+$$
+
+RL_{i,t} = \beta_0 + \beta_1{sex}_{i} + \beta_2{visit}_{i,t} + f(\text{age}_{i,t}) + b_{0i} + \epsilon_{i,t}, \quad e \sim N(0,\sigma^2)   
+
+$$
+where $$RL_{i,t}$$ is the RL parameter value for person $$i$$ on visit $$t$$. All other variables are specified and estimated identically as equation ##. We applied the Bonferroni? correction to account for multiple comparisons ($$\alpha < 0.0167$$ uncorrected).
+
+
+## Fitting the GAMMs and adjusting for multiple comparrisons.
+
+```{r Daw ~ s(age) results}
+#fss
+fss_age <- gamm(firststagestay ~ 1 + sex + visitnum_numeric +
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(fss_age$lme)
+summary(fss_age$gam)
+
+#Figure
+draw(fss_age)
+
+#P-value test
+summary(fss_age$gam)$s.table[4] < 0.05/4
+
+
+#mb
+mb_age <- gamm(modelbased ~ 1 + sex + visitnum_numeric +
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(mb_age$lme)
+summary(mb_age$gam)
+
+#Figure
+draw(mb_age)
+
+#P-value test
+summary(mb_age$gam)$s.table[4] < 0.05/4
+
+
+#mf
+mf_age <- gamm(modelfree ~ 1 + sex + visitnum_numeric +
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(mf_age$lme)
+summary(mf_age$gam)
+
+#Figure
+draw(mf_age)
+
+#P-value test
+summary(mf_age$gam)$s.table[4] < 0.05/4
+```
+
+
+**All age smooths are significantly different than 0. Additionally, they are all positively associated with RL such that as age increases, RL parameters increase. Important to note that for FSS and MB, there is a main effect of age, such that males have higher values than females controlling for age and experience with the task (i.e., visit number covariate inclusion).**
+
+
+## **Associations between RL parameters and nT2*w**
+
+Next, we want to see if there is any relationship between the iron measures and the RL parameters. Including age in these equations would more than likely render each effect non-significant, so I will not include them now.
+
+Insert equation once finalized
+
+
+```{r Bivariate Main Effects (NO AGE)}
+#Caudate model based
+ca_mb <- gamm(harox_caudate_harm ~ 1 + sex + visitnum_numeric +
+                         s(modelbased_z, k = 3, fx = TRUE) +
+                s(id, bs = "re"),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(ca_mb$lme)
+summary(ca_mb$gam)
+
+#Figure
+draw(ca_mb) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(ca_mb$gam)$s.table[4] < 0.05/12
+
+
+#Caudate model free
+ca_mf <- gamm(harox_caudate_harm ~ 1 + sex + visitnum_numeric +
+                         s(modelfree_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(ca_mf$lme)
+summary(ca_mf$gam)
+
+#Figure
+draw(ca_mf) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(ca_mf$gam)$s.table[4] < 0.05/12
+
+#Caudate fss
+ca_fss <- gamm(harox_caudate_harm ~ 1 + sex + visitnum_numeric +
+                         s(firststagestay_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(ca_fss$lme)
+summary(ca_fss$gam)
+
+#Figure
+draw(ca_fss) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(ca_fss$gam)$s.table[4] < 0.05/12
+
+#NACC model based
+nacc_mb <- gamm(harox_nacc_harm ~ 1 + sex + visitnum_numeric +
+                         s(modelbased_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(nacc_mb$lme)
+summary(nacc_mb$gam)
+
+#Figure
+draw(nacc_mb) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(nacc_mb$gam)$s.table[4] < 0.05/12
+
+
+#nacc model free
+nacc_mf <- gamm(harox_nacc_harm ~ 1 + sex + visitnum_numeric +
+                         s(modelfree_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(nacc_mf$lme)
+summary(nacc_mf$gam)
+
+#Figure
+draw(nacc_mf) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(nacc_mf$gam)$s.table[4] < 0.05/12
+
+#nacc fss
+nacc_fss <- gamm(harox_nacc_harm ~ 1 + sex + visitnum_numeric +
+                         s(firststagestay_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(nacc_fss$lme)
+summary(nacc_fss$gam)
+
+#Figure
+draw(nacc_fss) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(nacc_fss$gam)$s.table[4] < 0.05/12
+
+
+#pallidum model based
+gp_mb <- gamm(harox_pallidum_harm ~ 1 + sex + visitnum_numeric +
+                         s(modelbased_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(gp_mb$lme)
+summary(gp_mb$gam)
+
+#Figure
+draw(gp_mb) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(gp_mb$gam)$s.table[4] < 0.05/12
+
+
+#pallidum model free
+gp_mf <- gamm(harox_pallidum_harm ~ 1 + sex + visitnum_numeric +
+                         s(modelfree_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(gp_mf$lme)
+summary(gp_mf$gam)
+
+#Figure
+draw(gp_mf) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(gp_mf$gam)$s.table[4] < 0.05/12
+
+#pallidum fss
+gp_fss <- gamm(harox_pallidum_harm ~ 1 + sex + visitnum_numeric +
+                         s(firststagestay_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(gp_fss$lme)
+summary(gp_fss$gam)
+
+#Figure
+draw(gp_fss) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(gp_fss$gam)$s.table[4] < 0.05/12
+
+
+#putamen model based
+put_mb <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+                         s(modelbased_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(put_mb$lme)
+summary(put_mb$gam)
+
+#Figure
+draw(put_mb) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(put_mb$gam)$s.table[4] < 0.05/12
+
+
+#putamen model free
+put_mf <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+                         s(modelfree_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(put_mf$lme)
+summary(put_mf$gam)
+
+#Figure
+draw(put_mf) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(put_mf$gam)$s.table[4] < 0.05/12
+
+#putamen fss
+put_fss <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+                         s(firststagestay_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(put_fss$lme)
+summary(put_fss$gam)
+
+#Figure
+draw(put_fss) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(put_fss$gam)$s.table[4] < 0.05/12
+```
+
+No associations with caudate/Nacc and the Daw parameters. For pallidum and putamen, MF and FSS were associated (as MF and FSS increase, pallidum iron increases).
+
+All of this is fine, but we want to see the relationships among Daw parameters, iron measures, and age. First I will look at main effects.
+
+```{r Main Effects (Yes AGE)}
+#Caudate model based
+ca_mb_age <- gamm(harox_caudate_harm ~ 1 + sex + visitnum_numeric +
+                    s(age, k = 3, fx = TRUE) +
+                         s(mb_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(ca_mb_age$lme)
+summary(ca_mb_age$gam)
+
+#Figure
+draw(ca_mb_age)# + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(ca_mb_age$gam)$s.table[2,4] < 0.05/12
+
+
+#Caudate model free
+ca_mf_age <- gamm(harox_caudate_harm ~ 1 + sex + visitnum_numeric +
+                 s(age, k = 3, fx = TRUE) +
+                         s(mf_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(ca_mf_age$lme)
+summary(ca_mf_age$gam)
+
+#Figure
+draw(ca_mf_age) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(ca_mf_age$gam)$s.table[2,4] < 0.05/12
+
+#Caudate fss
+ca_fss_age <- gamm(harox_caudate_harm ~ 1 + sex + visitnum_numeric +
+                  s(age, k = 3, fx = TRUE) +
+                         s(fss_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(ca_fss_age$lme)
+summary(ca_fss_age$gam)
+
+#Figure
+draw(ca_fss_age) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(ca_fss_age$gam)$s.table[2,4] < 0.05/12
+
+#NACC model based
+nacc_mb_age <- gamm(harox_nacc_harm ~ 1 + sex + visitnum_numeric +
+                   s(age, k = 3, fx = TRUE) +
+                         s(mb_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(nacc_mb_age$lme)
+summary(nacc_mb_age$gam)
+
+#Figure
+draw(nacc_mb_age) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(nacc_mb_age$gam)$s.table[2,4] < 0.05/12
+
+
+#nacc model free
+nacc_mf_age <- gamm(harox_nacc_harm ~ 1 + sex + visitnum_numeric +
+                   s(age, k = 3, fx = TRUE) +
+                         s(mf_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(nacc_mf_age$lme)
+summary(nacc_mf_age$gam)
+
+#Figure
+draw(nacc_mf_age) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(nacc_mf_age$gam)$s.table[2,4] < 0.05/12
+
+#nacc fss
+nacc_fss_age <- gamm(harox_nacc_harm ~ 1 + sex + visitnum_numeric +
+                    s(age, k = 3, fx = TRUE) +
+                         s(fss_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(nacc_fss_age$lme)
+summary(nacc_fss_age$gam)
+
+#Figure
+draw(nacc_fss_age) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(nacc_fss_age$gam)$s.table[2,4] < 0.05/12
+
+
+#pallidum model based
+gp_mb_age<- gamm(harox_pallidum_harm ~ 1 + sex + visitnum_numeric +
+                 s(age, k = 3, fx = TRUE) +
+                         s(mb_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(gp_mb_age$lme)
+summary(gp_mb_age$gam)
+
+#Figure
+draw(gp_mb_age) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(gp_mb_age$gam)$s.table[2,4] < 0.05/12
+
+
+#pallidum model free
+gp_mf_age <- gamm(harox_pallidum_harm ~ 1 + sex + visitnum_numeric +
+                 s(age, k = 3, fx = TRUE) +
+                         s(mf_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(gp_mf_age$lme)
+summary(gp_mf_age$gam)
+
+#Figure
+draw(gp_mf_age) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(gp_mf_age$gam)$s.table[2,4] < 0.05/12
+
+#pallidum fss
+gp_fss_age <- gamm(harox_pallidum_harm ~ 1 + sex + visitnum_numeric +
+                  s(age, k = 3, fx = TRUE) +
+                         s(fss_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(gp_fss_age$lme)
+summary(gp_fss_age$gam)
+
+#Figure
+draw(gp_fss_age) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(gp_fss_age$gam)$s.table[2,4] < 0.05/12
+
+
+#putamen model based
+put_mb_age <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+                  s(age, k = 3, fx = TRUE) +
+                         s(mb_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(put_mb_age$lme)
+summary(put_mb_age$gam)
+
+#Figure
+draw(put_mb_age) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(put_mb_age$gam)$s.table[2,4] < 0.05/12
+
+
+#putamen model free
+put_mf_age <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+                  s(age, k = 3, fx = TRUE) +
+                         s(mf_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(put_mf_age$lme)
+summary(put_mf_age$gam)
+
+#Figure
+draw(put_mf_age) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(put_mf_age$gam)$s.table[2,4] < 0.05/12
+
+#putamen fss
+put_fss_age <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+                   s(age, k = 3, fx = TRUE) +
+                         s(fss_resid_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(put_fss_age$lme)
+summary(put_fss_age$gam)
+
+#Figure
+draw(put_fss_age) + scale_y_continuous(trans = "reverse")
+
+#P-value test
+summary(put_fss_age$gam)$s.table[2,4] < 0.05/12
+```
+
+After controlling for age, any association between nT2*w and Daw parameters are not significant. The effect of age is quite large.
+
+
+```{r Exploratory Interactions}
+#
+t <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+            s(age, k = 3, fx = T) +
+            s(age, by = fss_resid_z, k = 3, fx = T),                      
+          random = list(id = ~1),
+                      method = "REML",
+          #na.action = na.exclude,
+                      data = full)
+summary(t$gam)
+draw(t)
+
+
+t1 <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+            s(age, k = 3, fx = T) +
+            s(age, by = modelbased_z, k = 3, fx = T),                      
+          random = list(id = ~1),
+                      method = "REML",
+          #na.action = na.exclude,
+                      data = full)
+summary(t1$gam)
+draw(t1)
+
+t2 <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+            s(age, k = 3, fx = T) +
+            s(age, by = modelfree_z, k = 3, fx = T),                      
+          random = list(id = ~1),
+                      method = "REML",
+          #na.action = na.exclude,
+                      data = full)
+summary(t2$gam)
+draw(t2)
+
+
+
+#Messing around with interactions as fixed effects.
+q <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+            s(age, k = 3, fx = T) + firststagestay_z + firststagestay_z:age,
+            #s(age, by = firststagestay_z, k = 3, fx = T),                      
+          random = list(id = ~1),
+                      method = "REML",
+          #na.action = na.exclude,
+                      data = full)
+summary(q$gam)
+
+#Model that works
+test_3 <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = TRUE) +
+                 s(firststagestay_z, k = 3, fx = TRUE) +
+                 s(modelbased_z, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "ML",
+                     data = full)
+summary(test_3$gam)
+
+
+#Model with time-varying parameters
+test_3 <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = TRUE) +
+                 s(age, by = fss_resid_z, k = 3, fx = TRUE) +
+                 s(age, by = mb_resid_z, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "REML",
+                     data = full)
+summary(test_3$gam)
+
+
+
+
+#b <- derivatives(test_3$gam)
+#draw(t)
+b <- ggpredict(test_3, terms = c("age[all]", "fss_resid_z[-2,2]"))
+#c <- ggpredict(t, terms = c("age[10, 12, 15, 18, 20,25,30]", "modelbased_z[-1,0,1]"))
+
+plot(b, show_data = TRUE) + scale_y_continuous(trans = "reverse")
+
+ggplot(b, aes(x = group, y = predicted, group = group)) +
+  geom_point() +
+  geom_line(group = 1) +
+  facet_wrap(~x, nrow = 1) +
+  scale_y_continuous(trans = "reverse") +
+  labs(x = "Habitual Behavior at mean (0) and +/- 1 SD",
+       y = "Predicted Putamen nT2*w")
+
+ggplot(c, aes(x = group, y = predicted, group = group)) +
+  geom_point() +
+  geom_line(group = 1) +
+  facet_wrap(~x, nrow = 1) +
+  scale_y_continuous(trans = "reverse") +
+  labs(x = "Goal-directed Behavior at mean (0) and +/- 1 SD",
+       y = "Predicted Putamen nT2*w")
+
+
+# +
+#            s(age, by = modelbased_z, k = 3, fx = T) +
+#            s(age, by = modelfree_z, k = 3, fx = T)
+```
+
+
+NOTE: REML is used to compare models with nested random effects and the same fixed effects structure. ML to compare model with nested fixed effects and the same random effect structure. There is ample literature supporting this choice. Douglas Bates discusses it here https://cran.r-project.org/web/packages/lme4/vignettes/Theory.pdf 
+
+```{r Model Comparrisons}
+#Maybe model comparison?
+test_1 <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "ML",
+                     data = full)
+summary(test_1$gam)
+summary(test_1$lme)
+
+test_2 <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = TRUE) +
+                 s(fss_resid_z, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "ML",
+                     data = full)
+summary(test_2$gam)
+
+test_3 <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = TRUE) +
+                 s(fss_resid_z, k = 3, fx = TRUE) +
+                 s(mb_resid_z, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "ML",
+                     data = full)
+summary(test_3$gam)
+
+test_4 <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric + 
+                       s(age, k = 3, fx = TRUE) +
+                 s(fss_resid_z, k = 3, fx = TRUE) +
+                 s(mb_resid_z, k = 3, fx = TRUE) +
+                 s(mf_resid_z, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "ML",
+                     data = full)
+summary(test_4$gam)
+
+# Compare models using anova function
+anova(test_1$lme, 
+      test_2$lme, 
+      test_3$lme, 
+      test_4$lme
+      )
+#Figure this weirdness out... difference between AIC and anova results.
+b <- c(AIC(test_1$lme, 
+           test_2$lme, 
+           test_3$lme, 
+           test_4$lme
+           ))
+which.min(b[[2]])
+
+plot(ggpredict(test_3, terms = c("fss_resid_z"))) + scale_y_continuous(trans = "reverse")
+```
+
+Model comparisons suggest that model 3 is the best model using AIC. BIC hates parameters so it favors model 1. Logliklihood ratio tests suggests that model 
+
+```{r Mediation}
+#Treating visitnum as numeric?
+full$visitnum_numeric <- as.numeric(full$visitnum)
+#a path, indirect effect
+m2 <- gam(harox_putamen_harm_z ~ 1 + sex  + visitnum_numeric +
+            s(age_z, k = 3, fx = TRUE) + s(id, bs = "re"), 
+          method = "REML", 
+          data = full)
+summary(m2)
+
+m3 <- gam(firststagestay ~ 1 + sex + visitnum_numeric + 
+             s(harox_putamen_harm_z, k = 3, fx = TRUE) +
+             s(age_z, k = 3, fx = TRUE) + s(id, bs = "re"),
+          method = "REML", 
+          data = full)
+summary(m3)
+
+m2 <- lm(harox_putamen_harm_z ~ 1 +  sex + visitnum_numeric + inv_age, data = full, na.action = na.exclude)
+summary(m2)
+m3 <- lm(firststagestay ~ 1 + sex + visitnum_numeric + inv_age + harox_putamen_harm_z, data = full, na.action = na.exclude)
+summary(m3)
+
+#Note that visitnum messes things up. Perhaps change to factor/numeric?
+#Testing moderated mediation models. Looking at "high habit" people.
+#high_habit <- mean(full$firststagestay_z) - sd(full$firststagestay_z)
+
+testing <- mediation::mediate(m2, m3, 
+                              treat = "inv_age",
+                   mediator = "harox_putamen_harm_z", 
+                   boot = T, 
+                   sims = 2000)
+summary(testing)
+plot(testing)
+
+#Sensitivity check
+sens.out <- medsens(testing, rho.by = 0.1, effect.type = "indirect", sims = 100)
+summary(sens.out)
+```
+
+
+```{r Messing around}
+test_3 <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+                       s(age, k = 3, fx = TRUE) +
+                 s(firststagestay_z, k = 3, fx = TRUE) +
+                 ti(age, firststagestay_z, k = 3, fx = TRUE) +
+                 s(modelbased_z, k = 3, fx = TRUE) +
+                 ti(age, modelbased_z, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "REML",
+                     data = full)
+summary(test_3$gam)
+plot(ggpredict(test_3, terms = c("modelbased_z","age[10,15,20,25,30]"))) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(test_3, terms = c("firststagestay_z", "age[10,15,20,25,30]"))) + scale_y_continuous(trans = "reverse")
+
+test_3 <- gamm(harox_putamen_harm ~ 1 + sex + visitnum_numeric  +
+                       s(age, k = 3, fx = TRUE) +
+                 s(firststagestay_z, k = 3, fx =TRUE) +
+                 ti(age, firststagestay_z, k = 3, fx = TRUE),
+                     random = list(id = ~1),
+                     method = "ML",
+                     data = full)
+summary(test_3$gam)
+
+put_age_fss <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+                       s(age_z, k = 3, fx = TRUE) +
+                      s(firststagestay_z, k = 3, fx = TRUE) +
+                     s(modelbased_z, k = 3, fx = T) +
+                     ti(age,firststagestay_z) +
+                     s(id, bs = "re", k = 3, fx = T),
+                     method = "REML",
+                     data = full)
+summary(put_age_fss)
+
+
+pred <- predict_response(put_age_fss, terms = c("age_z", "firststagestay_z[-2,-1,0,1,2]"))
+print(pred, collapse_tables = TRUE)
+plot(pred, show_data = TRUE) + scale_y_continuous(trans = "reverse")
+#Trying to get ash plot...
+#Might be easier with gratia
+ggplot(pred, aes(x = predicted, y = group)) + geom_point()
+
+fd <- derivatives(put_age_fss)
+ggplot(fd %>% filter(.smooth == "s(age_z):firststagestay_z"), aes(x = age_z, y = .derivative, group = .smooth)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = .lower_ci, ymax = .upper_ci), alpha = 0.3) +
+  geom_hline(yintercept = 0) +
+  scale_y_continuous(trans = "reverse")
+
+spotlight_analysis(pred)
+
+johnson_neyman(pred)
+
+plot(johnson_neyman(pred)) + scale_y_continuous(trans = "reverse")
+
+
+plot(predict_response(put_age_fss, terms = c("age_z", "firststagestay_z[-2,-1,1,0,1,2]")), show_data = T) + 
+  scale_y_continuous(trans = "reverse") 
+#+ 
+#  geom_point(data = full, aes(x = age_z, y = harox_putamen_harm))
+
+#Minimum velocity playing around
+plot_slopes(put_age_fss, variables = "firststagestay_z", slope = "eyex", condition = c("age_z", "firststagestay_z")) + scale_y_continuous(trans = "reverse")
+
+
+smh <- gamm(firststagestay ~ 1 + sex + visitnum_numeric +
+              s(age_z, k = 3, fx = TRUE) +
+              s(harox_putamen_harm_resid_z, k = 3, fx = TRUE) #+
+              #s(harox_caudate_harm, k = 3, fx = TRUE) #+
+              #s(harox_nacc_harm, k = 3, fx = TRUE) #+
+              #s(harox_pallidum_harm, k = 3, fx = TRUE)
+            ,
+            random = list(id = ~1),
+                     method = "REML",
+                     data = full)
+summary(smh$gam)
+
+full$pred <- predict.gam(t$gam)
+full$resid <- residuals(t$gam)
+
+ggplot(full, aes(x = age, y = residuals.gam(t$gam), group = id)) +
+  geom_point() +
+  geom_line() +
+  scale_y_continuous(trans = "reverse") +
+  stat_smooth(method = "gam",  aes(group = 1), color = "black", linewidth = 1.5)
+
+
+plot(ggpredict(t, terms = c("firststagestay_z", "age[10,15,20,25,30]")), show_data = T) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(t, terms = c("age", "harox_putamen_harm_z"))) + scale_y_continuous(trans = "reverse")
+plot(ggpredict(t, terms = c("firststagestay_z"))) + scale_y_continuous(trans = "reverse")
+draw(t) + scale_y_continuous(trans = "reverse")
+t <- gamm(firststagestay ~ 1 + sex + visitnum_numeric +
+            s(age, k = 3, fx = T) +
+            s(age, by = harox_putamen_harm_resid_z, k = 3, fx = T),
+            #             s(harox_nacc_harm_z, k = 3, fx = F) +
+            #s(harox_caudate_harm_z, k = 3, fx = F) +
+            #s(harox_pallidum_harm_z, k = 3, fx = F),
+           #s(id, bs = "re"),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(t$gam)
+plot(ggpredict(t, terms = c("age", "harox_putamen_harm_resid_z[-2,-1,0,1,2]")))
+k.check(t$gam)
+concurvity(t$gam)
+```
+
+```{r MOre sillyness}
+#Comparing predictions with random intercepts and without random intercepts.
+test <- full %>% group_by(id) %>% filter(n() == 3)
+
+no_randint <- gam(harox_putamen_harm ~ 1 + age:sex + s(id, bs = "re") + s(id,age, bs = "re"), 
+                  method = "REML", 
+                  data = test, 
+                  na.action = na.exclude)
+summary(no_randint)
+#Extract predicted values
+new_data <- tidyr::expand(test, nesting(id, age),
+                          sex = unique(sex))
+
+
+##test$pred_no_randint <- predict.gam(no_randint)
+#predictions <- predict(no_randint, newdata = test, se.fit = TRUE)
+#test$pred <- predictions$fit
+#Plot
+ggplot(test, aes(x = age_z, y = pred, group = id)) +
+  geom_point() +
+  geom_line(aes(colour = id)) +
+  stat_smooth(method = "gam", aes(group = 1))
+
+
+put_age_fss <- gam(harox_putamen_harm ~ 1 + sex + visitnum_numeric +
+                       s(age_z, k = 3, fx = TRUE) +
+                     s(id, bs = "re", k = 3, fx = T),
+                     method = "REML",
+                     data = full,
+                   na.action = na.exclude)
+summary(put_age_fss)
+
+full$pred <- predict.gam(put_age_fss)
+
+ggplot(full, aes(x = age_z, y = pred, group = id)) +
+  geom_point() +
+  geom_line() +
+  stat_smooth(method = "gam", aes(group = 1))
+```
+

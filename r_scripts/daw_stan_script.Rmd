@@ -1,0 +1,418 @@
+---
+title: "daw_stan_script"
+author: "Daniel Petrie"
+date: "2024-04-10"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+```{r}
+library(hBayesDM)
+library(rstan)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+setwd("C:/Users/djpet/Documents/daw_resting_state")
+```
+
+Cleaning Daw task data.
+
+Only 4 columns of data are needed. There can be other columns included in the data frame. They must be labeled correctly for the package to work.
+
+- "subjID"
+- "level1_choice"
+- "level2_choice"
+- "reward"
+
+More specific information below:
+
+subjID
+A unique identifier for each subject in the data-set.
+
+level1_choice
+Choice made for Level (Stage) 1 (1: stimulus 1, 2: stimulus 2).
+
+level2_choice
+Choice made for Level (Stage) 2 (1: stimulus 3, 2: stimulus 4, 3: stimulus 5, 4: stimulus 6).
+Note that, in our notation, choosing stimulus 1 in Level 1 leads to stimulus 3 & 4 in Level 2 with a common (0.7 by default) transition. Similarly, choosing stimulus 2 in Level 1 leads to stimulus 5 & 6 in Level 2 with a common (0.7 by default) transition. To change this default transition probability, set the function argument `trans_prob` to your preferred value.
+
+reward
+Reward after Level 2 (0 or 1).
+
+NOTE: ALL OF THIS IS NOW ON HERA! IT TAKES FAR TOO LONG TO RUN LOCALLY!
+
+```{r}
+luna_7t <- read.csv("luna_7tbrainmech.csv", header = TRUE)
+luna_pet <- read.csv("luna_pet.csv", header = TRUE)
+luna_full <- rbind(luna_7t, luna_pet)
+length(unique(luna_full$id)) #416 subjects
+#Subject 11455 has 400 trials. Not sure why, so removing for now. If they have neuroimaging data, consider taking first 200 trials?
+#trials_per_subject <- luna_full%>% 
+#  group_by(id) %>% 
+#  summarise(trial_count = n())
+
+#Let's just try with luna_pet first
+#Adding trial number
+luna_full <- luna_full %>%
+  group_by(id) %>%
+  mutate(trial = row_number()) %>%
+  filter(choice1 != 0 & choice2 != 0) %>%
+  rename(subjID = id,
+         level1_choice = choice1,
+         reward = money) %>% 
+  mutate(level2_choice = case_when(
+    level1_choice == 1 & choice2 == 1 & state == 2 ~ 1,
+    level1_choice == 1 & choice2 == 2 & state == 2 ~ 2,
+    level1_choice == 2 & choice2 == 1 & state == 3 ~ 3,
+    level1_choice == 2 & choice2 == 2 & state == 3 ~ 4,
+    level1_choice == 1 & choice2 == 1 & state == 3 ~ 3,
+    level1_choice == 1 & choice2 == 2 & state == 3 ~ 4,
+    level1_choice == 2 & choice2 == 1 & state == 2 ~ 1,
+    level1_choice == 2 & choice2 == 2 & state == 2 ~ 2)) %>% 
+    filter(!(subjID %in% c("11455_20181218", "11565_20190709")))
+length(unique(luna_full$subjID)) #414
+
+#Some script to make luna_full a .txt file.
+```
+
+In hBayesDM package, there are three different flavors of RL models, where the biggest difference is the number of estimated parameters.
+
+4 parameter model:
+- alpha (learning rate for both stages 1 & 2)
+- beta (inverse temp for both stages 1 & 2)
+- pi (perseverance)
+- w (model-based weight)
+
+6 parameter model:
+- alpha1
+- alpha2
+- beta1
+- beat2
+- pi
+- w
+
+7 parameter model (oringinal Daw model; Daw et al., 2011):
+- alpha1
+- alpha2
+- beta1
+- beat2
+- pi
+- w
+- eligibility trace
+
+
+Lets look at the simplest model first.
+
+Started appox 239 pm
+
+```{r}
+#test <- ts_par4(data = luna_pet, inc_postpred = TRUE)
+```
+
+
+Looking at hBayesDM output.
+
+```{r}
+bayes <- readRDS("ts_par4_test_results.rds")
+
+#Basic graphs of full model
+#Posterior distribution of hyper parameter.
+plot(bayes)
+
+#Diagnostic mustache plot for MCMC performace of hyper parameters.
+plot(bayes, type = "trace")
+
+#Include "burn in" or warmpup MCMC samples 
+plot(bayes, type = "trace", inc_warmup = TRUE)
+
+#For hyper parameters (Not sure what sigma is referring to just yet)
+plotInd(bayes)
+
+#For individual level plots.
+plotInd(bayes, "pi") #Replace with whatever parameter was estimated.
+plotInd(bayes, "w")
+plotInd(bayes, "beta")
+```
+
+Compare models can be done using Leave-One-Out information criteria (LOOIC) or Widely Applicable INformation Criterion (WAIC).
+
+```{r}
+#Default is LOOIC
+printFit(model1, model2, model3, model4)
+printFit(bayes, ic = "both")
+```
+
+
+Posterior predictive checks:
+
+ELI5: Posterior predictive checks are when a fitted model is used to generate simulated data and check if simulated data are similar to actual data. It answers the questions "Does my model generate valid predictions?"
+
+Make sure to set inc_postpred = TRUE to get these. Is seems to increase run time AND increase file size.
+
+```{r}
+##example
+#bayes_ex <- ts_par4("example",
+#                    niter = 2000,
+#                    nwarmup = 1000,
+#                    inc_postpred = TRUE)
+##dimensions of predicted values.
+#dim(bayes_ex$parVals$y_pred_step1) #4000 MCMC samples x 11 subjects x 200 trials
+#dim(bayes_ex$parVals$y_pred_step2)
+#
+##Averaging the 4000 MCMC samples, we will just look at step 1.
+#y_pred_mean <- apply(bayes_ex$parVals$y_pred_step2, c(2,3), mean)
+#
+#dim(y_pred_mean) #11 subjects x 200 trials
+#
+##Number of subjects
+#numSubjs <- dim(bayes_ex$allIndPars)[1]
+#
+##Create list of subject ids
+##Get max number of trials
+##True data
+#subjList <- unique(bayes_ex$rawdata$subjID)
+#maxT <- max(table(bayes_ex$rawdata$subjID))
+#true_y <- array(NA, c(numSubjs, maxT))
+#
+#
+##True data for each subject
+##THe dimensions are off here. Figure that out at somepoint to run these.
+#for (i in 1:numSubjs) {
+#  tmpID = subjList[i]
+#  tmpData = subset(bayes_ex$rawdata, subjID == tmpID)
+#  true_y[i,] = tmpData$level2_choice
+#}
+#
+### Subject #1
+#plot(true_y[1, ], type="l", xlab="Trial", ylab="Choice (0 or 1)", yaxt="n")
+#lines(y_pred_mean[1,], col="red", lty=2)
+#axis(side=2, at = c(0,1) )
+#legend("bottomleft", legend=c("True", "PPC"), col=c("black", "red"), lty=1:2)
+```
+
+
+
+Ok I want to mess around with these parameters, I should bring in age, and the neuro measures and see what those look like.
+
+First, some notes on the contents of the hBayesDM object.
+
+allindPars: Each subjects parameters, it also has the hyper parameters.
+
+parVals: Posterior MCMC samples. Thus, for this example, each subject (66 total) has 4 chains with 4000 iterations, so with the 1000 burn in that leaves 3000 x 4 = 12000 samples per parameter. 
+
+```{r}
+#Subset individual parameters
+bayes_ind <- bayes$allIndPars
+bayes_ind <- bayes_ind %>%
+  rename(id = subjID)
+
+bayes_ind <- bayes_ind %>%
+  separate(id, c("id", "vdate"))
+
+#Get age and sex data.
+merge_pet <- read.csv("merged_pet.csv", header = TRUE)
+merge_pet %>% select(lunaid, vdate, behdatestr, dtbzdate)
+merge_pet <- merge_pet %>% select(lunaid, 
+                                  behdatestr, 
+                                  age,
+                                  sex) %>% rename(id = lunaid,
+                                                  vdate = behdatestr)
+
+#Trying to merge
+merge_pet$id <- as.character(merge_pet$id) 
+merge_pet$vdate <- as.character(merge_pet$vdate) 
+#luna_7t <- left_join(bayes_ind, merge_pet, by = c("id", "vdate"))
+pet_bayes <- merge(bayes_ind, merge_pet, by = c("id", "vdate"))
+```
+
+Imaging data
+
+```{r}
+#Get list of all txt files
+temp_rest <- list.files(path = "C:/Users/djpet/Documents/daw_resting_state/corr_data", 
+                        pattern = "mat",
+                        full.names = TRUE)
+temp_names <- list.files(path = "C:/Users/djpet/Documents/daw_resting_state/corr_data",
+                         pattern = "mat")
+
+#Read all txt files into list
+datalist <- lapply(temp_rest,
+                   FUN = read.table,
+                   header = T)
+
+#Creating row names
+#dput(colnames(datalist[[1]]))
+row_names <- dput(colnames(datalist[[1]]))
+
+#Append row names to list elements
+datalist <- lapply(datalist,
+                   function(x) cbind(x, row_names))
+
+#Creat wide dataframe for each element in list.
+datalist <- lapply(1:length(datalist), 
+                   function(x) (
+                     pivot_wider(datalist[[x]], 
+                                 names_from = row_names, 
+                                 values_from = c("roi1","roi2", 
+                                                 "roi3", "roi4", 
+                                                 "roi5", "roi6", 
+                                                 "roi7", "roi8",
+                                                 "roi9", "roi10"))))
+
+#Creat data frame that is 
+rest_data <- bind_rows(datalist)
+rest_data$tempid <- cbind(temp_names)
+
+
+rest_data <- rest_data %>%
+  separate(tempid, c("id", "vdate"))
+
+# compute visit number
+visit_info_rest <- rest_data %>% 
+  select(id, vdate) %>% 
+  group_by(id) %>% 
+  distinct() %>% 
+  mutate(visitnum=rank(as.numeric(as.character(vdate))))
+
+#Merge visit number
+rest_data <- merge(rest_data, 
+             visit_info_rest %>% select(id, vdate, visitnum), 
+             by=c('id','vdate'))
+
+#Subsetting "upper-diagonal" values. No need for autocorrelation/diagonal in this case.
+#Probably more elegant ways of doing this...
+
+rest_data <- rest_data %>% 
+  select(c("id", "vdate", "visitnum", 
+           "roi1_roi2", "roi1_roi3", "roi1_roi4", "roi1_roi5", 
+           "roi1_roi6", "roi1_roi7", "roi1_roi8", "roi1_roi9", 
+           "roi1_roi10", 
+           
+           "roi2_roi3", "roi2_roi4", "roi2_roi5", "roi2_roi6", 
+           "roi2_roi7", "roi2_roi8", "roi2_roi9", "roi2_roi10",  
+           
+           "roi3_roi4", "roi3_roi5", "roi3_roi6", 
+           "roi3_roi7", "roi3_roi8", "roi3_roi9", "roi3_roi10",  
+           
+           "roi4_roi5", "roi4_roi6", "roi4_roi7", 
+           "roi4_roi8", "roi4_roi9", "roi4_roi10", 
+           
+           "roi5_roi6", "roi5_roi7", "roi5_roi8", "roi5_roi9", 
+           "roi5_roi10", 
+           
+           "roi6_roi7", "roi6_roi8", "roi6_roi9", "roi6_roi10",  
+           
+           "roi7_roi8", 
+           "roi7_roi9", "roi7_roi10",  
+           
+           "roi8_roi9", 
+           "roi8_roi10",  
+           
+           "roi9_roi10"))
+#Looks correct
+table(matrix(1:10,10,10) %>% upper.tri())
+
+#Rename colums to ROI names.
+#From Hera/Dan/scripts/README.txt (hint CTRL + SHIFT + C) huh?
+#1. NAcc.nii.gz
+#2. Putamen.nii.gz
+#3. Caudate.nii.gz
+#4. SMA 
+#5. dlPFC 
+#6. subgenualACC.nii.gz
+#7. ventralACC.nii.gz
+#8. rostralACC.nii.gz
+#9. postmedofc.nii.gz (this might be OFC actually)
+#10. anteriorvmPFC.nii.gz
+
+rest_data <- rest_data %>% 
+  rename(nacc_put = "roi1_roi2",
+         nacc_ca = "roi1_roi3", 
+         nacc_sma = "roi1_roi4",
+         nacc_dlpfc = "roi1_roi5",
+         nacc_sacc = "roi1_roi6",
+         nacc_vacc = "roi1_roi7",
+         nacc_racc = "roi1_roi8",
+         nacc_pmofc = "roi1_roi9",
+         nacc_avmpfc = "roi1_roi10",
+         
+         put_ca = "roi2_roi3",    
+         put_sma = "roi2_roi4",
+         put_dlpfc = "roi2_roi5",  
+         put_sacc = "roi2_roi6",
+         put_vacc = "roi2_roi7",
+         put_racc = "roi2_roi8",
+         put_pmofc = "roi2_roi9",
+         put_avmpfc = "roi2_roi10",
+         
+         ca_sma = "roi3_roi4",   
+         ca_dlpfc = "roi3_roi5",
+         ca_sacc = "roi3_roi6",
+         ca_vacc = "roi3_roi7", 
+         ca_racc = "roi3_roi8",
+         ca_pmofc = "roi3_roi9",
+         ca_avmpfc = "roi3_roi10",
+         
+         sma_dlpfc = "roi4_roi5",   
+         sma_sacc = "roi4_roi6",
+         sma_vacc = "roi4_roi7",
+         sma_racc = "roi4_roi8",
+         sma_pmofc = "roi4_roi9",
+         sma_avmpfc = "roi4_roi10",
+         
+         dlpfc_sacc = "roi5_roi6",
+         dlpfc_vacc = "roi5_roi7",
+         dlpfc_racc = "roi5_roi8",
+         dlpfc_pmofc = "roi5_roi9",
+         dlpfc_avmpfc = "roi5_roi10",
+         
+         sacc_vacc = "roi6_roi7",  
+         sacc_racc = "roi6_roi8",
+         sacc_pmofc = "roi6_roi9", 
+         sacc_avmpfc = "roi6_roi10", 
+           
+         vacc_racc = "roi7_roi8", 
+         vacc_pmofc = "roi7_roi9", 
+         vacc_avpmc = "roi7_roi10",   
+         
+         racc_pmofc = "roi8_roi9",
+         racc_avpmc = "roi8_roi10", 
+         
+         pmofc_avpmc = "roi9_roi10")
+
+
+#Getting visit number for bet_bayes
+#pet_bayes <- pet_bayes %>% 
+#  select(id, vdate) %>% 
+#  group_by(id) %>% 
+#  distinct() %>% 
+#  mutate(visitnum=rank(as.numeric(as.character(vdate))))
+rest_data <- rest_data %>% filter(visitnum == 3 | 4)
+
+
+pet_bayes <- merge(pet_bayes,
+                rest_data,
+                by = c("id")) %>% distinct()
+dim(merge_test)
+length(unique(merge_test$id))
+```
+
+
+Cool
+
+```{r}
+#This is PET, so only 1 time doing Daw task
+ggplot(data = pet_bayes, 
+       aes(x=nacc_dlpfc, y=beta)) + 
+  geom_point() +
+  #geom_line() +
+  theme_bw(base_size = 15) +
+  stat_smooth(method = "gam",  aes(group = 1), color = "darkblue")
+
+summary(lm(pi ~ 1 + age + sex, data = pet_bayes))
+```
+
+Pi (perseverance/persistance/sticky choice) parameter is in the expected direction (i.e., goes up with age).

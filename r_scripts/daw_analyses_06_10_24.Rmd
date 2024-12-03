@@ -1,0 +1,1883 @@
+---
+title: "daw_analyses"
+author: "Daniel Petrie"
+date: "2024-04-24"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+WD/Libraries/data
+
+Note: At some point I should plot based on stored ggeffects modeling data directly.
+
+```{r Global}
+library("ggplot2") #For plotting
+library("GGally") #ggpairs()
+library("tidyverse") #Wranglin
+library("dplyr") #Wranglin
+library("interactions")
+library("lme4") #MLM
+library("lmerTest") #p-vals
+library("ggeffects") #For marginal/conditional effects plots
+#library("margins") #For margins() function. Useful for comparing margins from ggeffects
+library("marginaleffects") #For hypothesis_test()
+library("parameters") #Other useful marginal effects functions
+library("gdata") #upperTriangle()
+library("mgcv") #GAMM
+library("ggpubr") #Combining plots
+library("bmlm") #Centering made easy
+library("neuroCombat") #Harminization
+library("LNCDR") #waterfall plot, lunaize plots 
+library("gratia") #mgcv companion package. Using draw among other funcs.
+#library("scales") #For Bart function
+library("psych") #Descriptives
+library("ggrain") #Raincloud plot
+#library("corrplot") #Corrplot()
+#Working directory (change to something better (onedrive?, something else?) at some point)
+#Hera feels correct at this moment. All files could live in directory R for this project.
+setwd("C:/Users/djpet/Documents/daw_resting_state")
+full <- read.csv("daw_project_060524.csv", header = TRUE)
+```
+
+11475 visit 2 should be removed.
+11498 visit 2 should be removed.
+11589 visit 2 should be removed.
+
+
+Cleaning
+
+
+```{r Cleaning}
+#Creating a different sex variable for some plots/analyses
+full <- full %>%
+  mutate(sex = as.character(sex),
+    sex_p = case_when(
+    sex == "M" ~ "Male",
+    sex == "F" ~ "Female",
+    TRUE ~ sex 
+  ))
+
+#Making visitnum a factor. Can change accordingly
+full$visitnum <- as.factor(full$visitnum)
+
+#Making sex a factor
+full$sex <- as.factor(full$sex)
+
+#Making an ordered factor.
+full$sex_p <- ordered(full$sex_p, levels = (c("Male", "Female")))
+
+#Inverse age for linear models.
+full$inv_age <- 1/full$age
+
+#Checking for duplicate rows due to weird merging situation I put myself in.
+full[which(duplicated(full$modelbased)),c(1:3, 8, 20)] #11475_2/11498_2/11589_2 are duplicates.
+#These ids have duplicated Daw visits, but different rest days. Taking rows with imaging data.
+
+full <- full %>%
+  filter(!(id == "11475" & visitnum == "2") & 
+           !(id == "11498" & visitnum == "2") &
+           !(id == "11589" & visitnum == "2"))
+
+#Treating visitnum as numeric?
+full$visitnum_numeric <- as.numeric(full$visitnum)
+```
+
+
+Plots
+1) Waterfall plot (N subjects) (red + blue)
+2) Puberty (red + blue)
+2) Raincould plot (Variability of tat2)
+3) Age x Daw plots
+4) Age x tat2 plots (trajectories of tat2)
+5) tat2 x Daw plots
+6) TV-GAM plot with putamen effect
+7) Daw (FSS) x RL (pi) plot
+
+It might be useful to create more "simple" behavioral plots (and subsequent analyses) demonstrating that daw task indeed worked. For now, I will just demonstrate that it changes over time. I think showing the "ideal" situations for model free, model based, and perhaps perseverance?
+
+**Waterfall plots**
+
+```{r Waterfall Plot}
+age_ranked <- waterfall_group(full %>% 
+                                dplyr::select(age, id, sex_p, study) %>%
+                                filter(complete.cases(.)))
+
+lunaize(ggplot(data = age_ranked, 
+               aes(x = age, y = age_id, group = age_id))) + 
+  geom_line(aes(group = age_id, color = sex_p)) + 
+  geom_point(aes(shape = sex_p, color=sex_p)) + 
+  ylab("") + 
+  xlab("Age") + 
+  scale_color_brewer(palette = "Dark2") +
+  theme(axis.title.y = element_blank(), 
+        axis.ticks.y = element_blank(), 
+        axis.text.y = element_blank(),   
+        legend.position=c(.15,.9), 
+        legend.title=element_blank(), 
+        axis.title.x = element_text(margin = margin(t = 10, 
+                                                    r = 0, 
+                                                    b = 0, 
+                                                    l = 0)))
+
+# Calculate table of sex counts for unique subject IDs
+print(table(full$sex[match(unique(full$id), full$id)]))
+```
+
+
+**Puberty plot**
+
+
+```{r}
+g1 <- ggplot(pub[!is.na(pub$PDSS),],
+             aes(x=sess.age, y=PDSS, color=sex1))+geom_point(size=2.25, alpha = 0.2, stroke=0)+   scale_x_continuous(limits = c(10,18))+ 
+  # stat_smooth(aes(group=tat2_roi,fill=tat2_roi), method='gam', formula=y~s(x), alpha = .5) +
+  stat_smooth(aes(group=sex1,fill=sex1), method='gam', alpha = .5) +
+  # stat_smooth(aes(fill=my_color_glu), method='lm', alpha = .5) +
+  geom_line(data= pub[!is.na(pub$PDSS),], aes(y=PDSS, color = sex1, group=lunaid), alpha=.2)+ 
+  scale_color_manual(values=c("red","blue"))+
+  scale_fill_manual(values=c("red","blue"))+
+  theme(legend.position="null", aspect.ratio=1, plot.title = element_text(size=20,color="black"),
+        axis.text=element_text(size=18,color="black"),
+        axis.title=element_text(size=18,color="black"),
+        panel.grid.major = element_blank(),panel.grid.minor=element_blank(),
+        panel.background=element_blank(), axis.line=element_line(colour="black")) +
+  # scale_y_continuous(trans="reverse")+
+  labs(y="Pubertal Development (Tanner)", x="Age")
+print(g1)
+ggMarginal(g1, type="densigram", groupColour=T, groupFill=T, size=5)
+```
+
+
+**Raincloud plot**
+
+
+```{r Raincloud Plot}
+#Selecting harmonized tat2 variables to plot. I'll grab inverse as well.
+tat2_harm_inv <- full %>% 
+  dplyr::select("id", "study",
+                "harox_pallidum_harm_inv",
+                "harox_nacc_harm_inv",
+                "harox_putamen_harm_inv", 
+                "harox_caudate_harm_inv")
+
+#Pivot longer for raincloud plot.
+tat2_full_harm <- pivot_longer(tat2_harm_inv, 
+                        cols = starts_with("harox"), 
+                        names_to = "roi", 
+                        values_to = "beta")
+
+#Change back to words for plotting
+#tat2_full_harm <- tat2_full_harm %>%
+#  mutate(study = ifelse(study == "1", "7t", "PET"))
+
+#Custom labels
+custom_labels <- c("Ca", 
+                   "NAcc",
+                   "GP", 
+                   "Pu")
+
+#Rainclooud plot by scanner
+lunaize(ggplot(tat2_full_harm %>% 
+         filter(complete.cases(.)), 
+       aes(x = roi, y = beta, fill = roi)) + 
+  geom_rain(alpha = 0.7) +
+  theme_bw() +
+  scale_fill_brewer(palette = "Dark2") +
+  guides(fill = "none", color = "none") +
+  labs(x = "ROI", y = "R2*") +
+  scale_x_discrete(labels = custom_labels) +
+    facet_wrap(~study))
+
+#Rainclooud plot for whole sample
+rain <- lunaize(ggplot(tat2_full_harm %>% 
+         filter(complete.cases(.)), 
+       aes(x = roi, y = beta, fill = roi)) + 
+  geom_rain(alpha = 0.7) +
+  theme_bw() +
+  scale_fill_brewer(palette = "Dark2") +
+  guides(fill = "none", color = "none") +
+  labs(x = "ROI", y = "nT2*w") +
+  scale_x_discrete(labels = custom_labels))
+```
+
+
+**Age x Daw Raw Data**
+
+
+```{r Age x Daw Raw Plot}
+daw_long <- full %>%
+  pivot_longer(cols = c(firststagestay_z, modelbased_z, modelfree_z), 
+               names_to = "outcome", 
+               values_to = "value")
+
+#All in the same plot. Weird because no stars for significance... need to figure that whole thing out.
+#This could also be useful later on?
+lunaize(ggplot(data = daw_long, 
+               aes(x=age, y=value, group = id, colour = outcome)) + 
+  geom_point() +
+  geom_line() +
+  theme_bw() +
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), se = FALSE, aes(group = outcome)) + 
+  #guides(fill = "none", color = "none") +
+  labs(x = "Age", y = "", color = "RL Parameter: ") +
+  scale_color_brewer(palette = "Dark2", 
+                     labels = c("First Stage Stay (z-scored)", 
+                                "Model Based (z-scored)", 
+                                "Model Free (z-scored)")) +
+  facet_wrap(~outcome)) +  
+  theme(legend.position = "top",
+        strip.text = element_blank())
+
+
+#Doing this in pieces in order to add significance stars appropiately.
+
+mb_age <- lunaize(ggplot(data = full, 
+               aes(x=age, y=modelbased_z, group = id, color = sex_p)) + 
+  geom_point(size = 2, alpha = 0.7) +
+  geom_line() +
+  theme_bw() +
+  ylim(-3, 3) +
+  stat_smooth(method = "gam",  aes(group = 1), color = "black", linewidth = 1.5) +
+  #guides(fill = "none", color = "none") +
+  labs(x = "Age", y = "Model Based (z-scored)") +
+  scale_color_brewer(palette = "Dark2", 
+                     name = "Sex")) +
+  theme(legend.position = "bottom")  +
+  geom_text(aes(x = 33.7, y = .5, 
+                label = "***"), 
+            size = 6,
+            color = "black",
+            angle = 90) 
+mb_age
+
+mf_age <- lunaize(ggplot(data = full, 
+               aes(x=age, y=modelfree_z, group = id, color = sex_p)) + 
+  geom_point(size = 2, alpha = 0.7) +
+  geom_line() +
+  theme_bw() +
+  ylim(-3, 3) +
+  stat_smooth(method = "gam",  aes(group = 1), color = "black", linewidth = 1.5) +
+  #guides(fill = "none", color = "none") +
+  labs(x = "Age", y = "Model Free (z-scored)") +
+  scale_color_brewer(palette = "Dark2", 
+                     name = "Sex")) +
+  theme(legend.position = "bottom")  +
+  geom_text(aes(x = 33.7, y = .9, 
+                label = "***"), 
+            size = 6,
+            color = "black",
+            angle = 90) 
+mf_age
+
+fss_age <- lunaize(ggplot(data = full, 
+               aes(x = age, y = firststagestay_z, group = id, color = sex_p)) + 
+  geom_point(size = 2, alpha = 0.7) +
+  geom_line() +
+  theme_bw() +
+  ylim(-3, 3) +
+  stat_smooth(method = "gam",  aes(group = 1), color = "black", linewidth = 1.5) +
+  #guides(fill = "none", color = "none") +
+  labs(x = "Age", y = "First Stage Stay (z-scored)") +
+  scale_color_brewer(palette = "Dark2", 
+                     name = "Sex")) +
+  theme(legend.position = "bottom")  +
+  geom_text(aes(x = 33.7, y = .95, 
+                label = "***"), 
+            size = 6,
+            color = "black",
+            angle = 90) 
+fss_age
+
+#Combining
+ggarrange(mb_age, mf_age, fss_age,
+          labels = c("A.", "B.", "C."),
+          ncol = 3,
+          nrow = 1, 
+          common.legend = TRUE, 
+          legend = "bottom")
+#Vs.
+# Combine the plots using cowplot
+#combined_plot <- plot_grid(
+#  plot_grid(img_ggplot, labels = "A", ncol = 1, align = "v", axis = "tb"), 
+#  plot_grid(test,labels = "B"),
+#            nrow = 2,
+#  rel_heights = c(1,1)
+#  )
+#combined_plot
+
+```
+
+
+
+Models with hBayes DM parameters.
+
+The seven free parameters (5 unique) that are estimated from hBayesDM can be described as follows:
+
+1. alpha (a) - learning rate: How quickly does an agent update its expectations based on the prediction error (the difference between expected and actual outcomes) at the first stage and second stage respectively. A higher learning rate means the agent quickly adapts to new information, while a lower learning rate means the agent is more conservative in updating its beliefs.
+
+2. beta (inverse temperature): The inverse temperature parameter controls the level of exploration versus exploitation in decision-making. A higher value of beta means the agent is more deterministic in its choices, favoring the option with the highest expected value (exploitation). A lower beta1 indicates more randomness in choice, implying higher exploration.
+a2 (learning rate in stage 2):
+
+
+3. pi (perseverance): The perseverance parameter reflects the tendency of the agent to repeat previous choices regardless of the outcomes. It captures the agent's bias towards sticking with a previously chosen action. Higher values indicate a stronger tendency to persevere with the same choice.
+
+4. w (model-based weight): This parameter represents the weight given to model-based versus model-free learning. Model-based learning involves planning and using a cognitive map of the task structure to make decisions, while model-free learning relies on cached values from past experiences. A higher w indicates greater reliance on model-based strategies, whereas a lower w suggests more dependence on model-free learning.
+
+5. lambda (eligibility trace): The eligibility trace parameter, lambda, is used in temporal difference learning to determine how much of the prediction error is assigned to past states and actions. It essentially influences the extent to which past experiences (not just the most recent one) are updated based on new information. A higher lambda means that more distant past experiences are considered when updating values.
+
+In summary, these parameters provide a comprehensive framework to understand and model the complexities of learning and decision-making in a two-step task. The learning rates (a1, a2) control how quickly expectations are updated, the inverse temperatures (beta1, beta2) influence the balance between exploration and exploitation, perseverance (pi) captures choice repetition tendencies, model-based weight (w) differentiates between planning and habitual actions, and the eligibility trace (lambda) distributes learning across past experiences.
+
+
+**Age x w/pi plots**
+
+```{r Age x w/pi plots}
+pi_trajectory <- gamm(pi ~ 1 + sex + visitnum +
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(pi_trajectory$gam)
+draw(pi_trajectory$gam)
+
+w_trajectory <- gamm(w ~ 1 + sex + visitnum +
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(w_trajectory$gam)
+draw(w_trajectory$gam)
+
+pi_age <- lunaize(ggplot(data = full, 
+               aes(x = age, y = pi, group = id, color = sex_p)) + 
+  geom_point(size = 2, alpha = 0.7) +
+  geom_line() +
+  theme_bw() +
+  #ylim(-3, 3) +
+  stat_smooth(method = "gam",  aes(group = 1), color = "black", linewidth = 1.5) +
+  #guides(fill = "none", color = "none") +
+  labs(x = "Age", y = "Persevereance") +
+  scale_color_brewer(palette = "Dark2", 
+                     name = "Sex")) +
+  theme(legend.position = "bottom")  +
+  geom_text(aes(x = 33.7, y = 1.67, 
+                label = "***"), 
+            size = 6,
+            color = "black",
+            angle = 90) 
+pi_age
+
+w_age <- lunaize(ggplot(data = full, 
+               aes(x = age, y = w, group = id, color = sex_p)) + 
+  geom_point(size = 2, alpha = 0.7) +
+  geom_line() +
+  theme_bw() +
+  #ylim(-3, 3) +
+  stat_smooth(method = "gam",  aes(group = 1), color = "black", linewidth = 1.5) +
+  #guides(fill = "none", color = "none") +
+  labs(x = "Age", y = "MB/MF weight") +
+  scale_color_brewer(palette = "Dark2", 
+                     name = "Sex")) +
+  theme(legend.position = "bottom")  +
+  geom_text(aes(x = 33.7, y = 0.58, 
+                label = "***"), 
+            size = 6,
+            color = "black",
+            angle = 90) 
+w_age
+
+ggarrange(pi_age, w_age,
+          labels = c("A.", "B."),
+          ncol = 2,
+          nrow = 1, 
+          common.legend = TRUE, 
+          legend = "bottom")
+```
+
+
+**Age x tat2 Raw Data**
+
+
+```{r Age x tat2 Raw Plots} 
+#All plotted together over time
+iron_long <- full %>%
+  pivot_longer(cols = c(harox_pallidum_harm, 
+                        harox_caudate_harm, 
+                        harox_nacc_harm,
+                        harox_putamen_harm),
+               names_to = "outcome", 
+               values_to = "value")
+#All in the same plot. Weird because no stars for significance... need to figure that whole thing out.
+#This could also be useful later on?
+iron_age <- lunaize(ggplot(data = iron_long, 
+               aes(x=age, y=value, group = id, colour = outcome)) + 
+  #geom_point() +
+  #geom_line() +
+  theme_bw() +
+  scale_y_continuous(trans = "reverse") +
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "tp"), se = TRUE, aes(group = outcome)) + 
+  #guides(fill = "none", color = "none") +
+  labs(x = "Age", y = "nT2*w", color = "ROI: ") +
+  scale_color_brewer(palette = "Dark2", 
+                     labels = c("Ca", 
+                                "NAcc", 
+                                "GP",
+                                "Pu"))) +
+  theme(legend.position = "top",
+        strip.text = element_blank())
+
+ggarrange(rain, iron_age, 
+          labels = c("A.", "B."),
+          ncol = 2,
+          nrow = 1, 
+          common.legend = TRUE, 
+          legend = "bottom")
+
+#keep em sep
+gp_age <- lunaize(ggplot(data = full %>% 
+                 filter(!is.na(sex)), 
+               aes(x=age, 
+                   y=harox_pallidum_harm_inv, 
+                   group = id, 
+                   color = sex_p)) + 
+          geom_point() +
+          geom_line() +
+          theme_bw() + 
+          stat_smooth(method = "gam",  
+                      aes(group = 1), 
+                      color = "black") +
+          labs(x = "Age", 
+               y = "R2*") + 
+          scale_color_brewer(palette = "Dark2", 
+                             name = "Sex")) + 
+  theme(legend.position = "bottom") +
+  ggtitle("Globus Pallidus")
+
+nacc_age <- lunaize(ggplot(data = full %>% 
+                 filter(!is.na(sex)), 
+               aes(x=age, 
+                   y=harox_nacc_harm_inv, 
+                   group = id, 
+                   color = sex_p)) + 
+          geom_point() +
+          geom_line() +
+          theme_bw() + 
+          stat_smooth(method = "gam",  
+                      aes(group = 1), 
+                      color = "black") +
+          labs(x = "Age", 
+               y = "R2*") + 
+          scale_color_brewer(palette = "Dark2", 
+                             name = "Sex")) + 
+  theme(legend.position = "bottom") +
+  ggtitle("Nucleus Accumbens")
+
+put_age <- lunaize(ggplot(data = full %>% 
+                 filter(!is.na(sex)), 
+               aes(x=age, 
+                   y=harox_putamen_harm_inv, 
+                   group = id, 
+                   color = sex_p)) + 
+          geom_point() +
+          geom_line() +
+          theme_bw() + 
+          stat_smooth(method = "gam",  
+                      aes(group = 1), 
+                      color = "black") +
+          labs(x = "Age", 
+               y = "R2*") + 
+          scale_color_brewer(palette = "Dark2", 
+                             name = "Sex")) + 
+  theme(legend.position = "bottom") +
+  ggtitle("Putamen")
+
+ca_age <- lunaize(ggplot(data = full %>% 
+                 filter(!is.na(sex)), 
+               aes(x=age, 
+                   y=harox_caudate_harm_inv, 
+                   group = id, 
+                   color = sex_p)) + 
+          geom_point() +
+          geom_line() +
+          theme_bw() + 
+          stat_smooth(method = "gam",  
+                      aes(group = 1), 
+                      color = "black") +
+          labs(x = "Age", 
+               y = "R2*") + 
+          scale_color_brewer(palette = "Dark2", 
+                             name = "Sex")) + 
+  theme(legend.position = "bottom") +
+  ggtitle("Caudate")
+
+ggarrange(gp_age, nacc_age, put_age, ca_age,
+          nrow = 2, ncol = 2,
+          common.legend = TRUE,
+          legend = "bottom")
+```
+
+
+**tat2 x Daw Raw Data**
+
+
+```{r tat2 x Daw Raw Plots}
+gp_daw <- lunaize(ggplot(data = full %>% 
+                 filter(!is.na(sex)), 
+               aes(x=firststagestay, 
+                   y=harox_pallidum_harm_inv, 
+                   group = id, 
+                   color = sex_p)) + 
+          geom_point() +
+          geom_line() +
+          theme_bw() + 
+          stat_smooth(method = "gam",  
+                      aes(group = 1), 
+                      color = "black") +
+          labs(x = "First Stage Stay", 
+               y = "R2*") + 
+          scale_color_brewer(palette = "Dark2", 
+                             name = "Sex")) + 
+  theme(legend.position = "bottom") +
+  ggtitle("Globus Pallidus")
+
+nacc_daw <- lunaize(ggplot(data = full %>% 
+                 filter(!is.na(sex)), 
+               aes(x=firststagestay, 
+                   y=harox_nacc_harm_inv, 
+                   group = id, 
+                   color = sex_p)) + 
+          geom_point() +
+          geom_line() +
+          theme_bw() + 
+          stat_smooth(method = "gam",  
+                      aes(group = 1), 
+                      color = "black") +
+          labs(x = "First Stage Stay", 
+               y = "R2*") + 
+          scale_color_brewer(palette = "Dark2", 
+                             name = "Sex")) + 
+  theme(legend.position = "bottom") +
+  ggtitle("Nucleus Accumbens")
+
+put_daw <- lunaize(ggplot(data = full %>% 
+                 filter(!is.na(sex)), 
+               aes(x=firststagestay, 
+                   y=harox_putamen_harm_inv, 
+                   group = id, 
+                   color = sex_p)) + 
+          geom_point() +
+          geom_line() +
+          theme_bw() + 
+          stat_smooth(method = "gam",  
+                      aes(group = 1), 
+                      color = "black") +
+          labs(x = "First Stage Stay", 
+               y = "R2*") + 
+          scale_color_brewer(palette = "Dark2", 
+                             name = "Sex")) + 
+  theme(legend.position = "bottom") +
+  ggtitle("Putamen")
+
+ca_daw <- lunaize(ggplot(data = full %>% 
+                 filter(!is.na(sex)), 
+               aes(x=firststagestay, 
+                   y=harox_caudate_harm_inv, 
+                   group = id, 
+                   color = sex_p)) + 
+          geom_point() +
+          geom_line() +
+          theme_bw() + 
+          stat_smooth(method = "gam",  
+                      aes(group = 1), 
+                      color = "black") +
+          labs(x = "First Stage Stay", 
+               y = "R2*") + 
+          scale_color_brewer(palette = "Dark2", 
+                             name = "Sex")) + 
+  theme(legend.position = "bottom") +
+  ggtitle("Caudate")
+
+ggarrange(gp_daw, nacc_daw, put_daw, ca_daw,
+          nrow = 2, ncol = 2,
+          common.legend = TRUE,
+          legend = "bottom")
+```
+
+
+**Association between FSS and pi**
+
+
+```{r FSS x pi Raw Plots}
+lunaize(ggplot(data = full %>% 
+                 filter(!is.na(sex)), 
+               aes(x=pi, y=firststagestay, group = id, color = sex_p)) + 
+  geom_point() +
+  geom_line() +
+  theme_bw() +
+  stat_smooth(method = "gam",  aes(group = 1), color = "black") +
+  #guides(fill = "none", color = "none") +
+  labs(x = "Perseverance", y = "First Stage Stay") +
+  scale_color_brewer(palette = "Dark2", 
+                     name = "Sex") +
+  theme(legend.position = "bottom"))
+```
+
+
+**Plotting Learning Rate alpha across ages**
+
+
+```{r Age x Alpha Raw Plots}
+lunaize(ggplot(data = full %>% 
+                 filter(!is.na(sex)), 
+               aes(x=age, y=a1, group = id, color = sex_p)) + 
+  geom_point() +
+  geom_line() +
+  theme_bw() +
+  stat_smooth(method = "gam",  aes(group = 1), color = "black") +
+  labs(x = "Age", y = "Learning Rate First Stage") +
+  scale_color_manual(values = c("Female" = "#1B9E77", 
+                                "Male" = "#D95F02"), 
+                     name = "Sex",
+                     guide = guide_legend(position = "bottom")) +
+  facet_wrap(~sex_p))
+
+lunaize(ggplot(data = full %>% 
+                 filter(!is.na(sex)), 
+               aes(x=age, y=a2, group = id, color = sex_p)) + 
+  geom_point() +
+  geom_line() +
+  theme_bw() +
+  stat_smooth(method = "gam",  aes(group = 1), color = "black") +
+  labs(x = "Age", y = "Learning Rate Second Stage") +
+  scale_color_manual(values = c("Female" = "#1B9E77", 
+                                "Male" = "#D95F02"), 
+                     name = "Sex",
+                     guide = guide_legend(position = "bottom")) +
+  facet_wrap(~sex_p))
+```
+
+
+**GAMM analyses**
+
+*Modeling in 3 parts*
+
+1) Developmental trajectories of FSS
+
+gamm(FSS ~ 1 + sex + visitnum + s(age))
+
+2) Developmental Trajectories of R2*
+
+Seems like Bart did something like this
+
+gamm(R2 ~ 1 + visitnum + te(age|sex)) if interaction is not significant,
+
+then,
+
+gamm(R2 ~ 1 + visitnum + s(age) + sex + s(age, by = sex))
+
+For now, I will just plot the factor smooths.
+
+Note: He also took derivative to assess range of significance using gratia. He also included visit number in all models.
+
+3) Associations between R2* and FSS (as main effects?)
+
+gamm(R2 ~ 1 + sex + visitnum + s(FSS) + s(age))
+
+OR
+
+gamm(R2 ~ 1 + sex + visitnum + s(FSS))
+
+
+4) Linear TV coefficient interaction
+
+gamm(R2 ~ 1 + visitnum + s(age) + s(age, by = FSS))
+
+
+**Developmental Trajectories of FSS and DAW**
+
+```{r Developmental Trajectories of Daw GAMM Plots}
+#Caudate model results
+#Note that s(age, by = sex_p) interaction NS. Thus removed.
+age_trajectory <- gamm(firststagestay_z ~ 1 + sex + visitnum +
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(age_trajectory$gam)
+
+
+age_trajectory <- gamm(modelbased_z ~ 1 + sex + visitnum +
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(age_trajectory$gam)
+
+age_trajectory <- gamm(modelfree_z ~ 1 + sex + visitnum +
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(age_trajectory$gam)
+draw(age_trajectory$gam)
+age_trajectory <- gamm(firststagestay_z ~ 1 + sex + visitnum +
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(age_trajectory$gam)
+
+#Extract margins
+age_margins <- ggpredict(age_trajectory$gam,
+               terms = c("age", "sex"))
+
+#Storing plot object
+age_plot <- plot(age_margins)
+
+#Marginal plot
+lunaize(age_plot + 
+  labs(title = "",
+       x = "Age",
+       y = "First Stage Stay",
+       color = "Sex") + 
+  geom_text(aes(x = 14, y = 1, 
+                label = "s(Age)* \nSex*"), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("Female" = "#1B9E77", 
+                                "Male" = "#D95F02"), 
+                     name = "Sex",
+                     guide = guide_legend(position = "bottom")))
+```
+
+
+**Developmental Trajectories of R2**
+
+```{r Developmental Trajectories of R2 GAMM Plots}
+#Pallidum model results
+#Note that s(age, by = sex_p) interaction NS. Thus removed.
+gp_trajectory <- gamm(harox_pallidum_harm_inv ~ 1 + sex_p + visitnum + 
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(gp_trajectory$gam)
+
+#Extract margins
+gp_margins <- ggpredict(gp_trajectory$gam,
+               terms = c("age", "sex_p"))
+
+#Storing plot object
+gp_plot <- plot(gp_margins)
+
+#Marginal plot
+gp_1 <- lunaize(gp_plot + 
+  labs(title = "Globus Pallidus",
+       x = "Age",
+       y = "R2*",
+       color = "Sex") + 
+  geom_text(aes(x = 14, y = 1.8, 
+                label = "s(Age)* \nSex n.s."), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("Female" = "#1B9E77", 
+                                "Male" = "#D95F02"), 
+                     name = "Sex",
+                     guide = guide_legend(position = "bottom")))
+
+
+#Nacc model results
+#Note that s(age, by = sex_p) interaction NS. Thus removed.
+na_trajectory <- gamm(harox_nacc_harm_inv ~ 1 + sex_p + visitnum + 
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(na_trajectory$gam)
+
+#Extract margins
+na_margins <- ggpredict(na_trajectory$gam,
+               terms = c("age", "sex_p"))
+
+#Storing plot object
+na_plot <- plot(na_margins)
+
+#Marginal plot
+na_1 <- lunaize(na_plot + 
+  labs(title = "Nuclues Accumbens",
+       x = "Age",
+       y = "R2*",
+       color = "Sex") + 
+  geom_text(aes(x = 14, y = 1.4, 
+                label = "s(Age)* \nSex n.s."), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("Female" = "#1B9E77", 
+                                "Male" = "#D95F02"), 
+                     name = "Sex",
+                     guide = guide_legend(position = "bottom")))
+
+
+#Putamen model results
+#Note that s(age, by = sex_p) interaction NS. Thus removed.
+put_trajectory <- gamm(harox_putamen_harm_inv ~ 1 + sex_p + visitnum + 
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(put_trajectory$gam)
+
+#Extract margins
+put_margins <- ggpredict(put_trajectory$gam,
+               terms = c("age", "sex_p"))
+
+#Storing plot object
+put_plot <- plot(put_margins)
+
+#Marginal plot
+put_1 <- lunaize(put_plot + 
+  labs(title = "Putamen",
+       x = "Age",
+       y = "R2*",
+       color = "Sex") + 
+  geom_text(aes(x = 14, y = 1.25, 
+                label = "s(Age)* \nSex n.s."), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("Female" = "#1B9E77", 
+                                "Male" = "#D95F02"), 
+                     name = "Sex",
+                     guide = guide_legend(position = "bottom")))
+
+
+#Caudate model results
+#Note that s(age, by = sex_p) interaction NS. Thus removed.
+ca_trajectory <- gamm(harox_caudate_harm_inv ~ 1 + sex_p + visitnum + 
+                         s(age, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(ca_trajectory$gam)
+
+#Extract margins
+ca_margins <- ggpredict(ca_trajectory$gam,
+               terms = c("age", "sex_p"))
+
+#Storing plot object
+ca_plot <- plot(ca_margins)
+
+#Marginal plot
+ca_1 <- lunaize(ca_plot + 
+  labs(title = "Caudate",
+       x = "Age",
+       y = "R2*",
+       color = "Sex") + 
+  geom_text(aes(x = 14, y = 1.16, 
+                label = "s(Age)* \nSex n.s."), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("Female" = "#1B9E77", 
+                                "Male" = "#D95F02"), 
+                     name = "Sex",
+                     guide = guide_legend(position = "bottom")))
+
+ggarrange(gp_1, na_1, put_1, ca_1,
+          nrow = 2, ncol = 2,
+          common.legend = TRUE,
+          legend = "bottom")
+```
+
+
+**Associations between FSS and R2**
+
+```{r Associations between FSS and R2 GAMM Plots}
+#Pallidum model results
+#Note that s(age, by = sex_p) interaction NS. Thus removed.
+gp_fss <- gamm(harox_pallidum_harm_inv ~ 1 + sex_p + visitnum + 
+                         s(firststagestay_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(gp_fss$gam)
+
+#Extract margins
+gp_fss_margins <- ggpredict(gp_fss$gam,
+               terms = c("firststagestay_z", "sex_p"))
+
+#Storing plot object
+gp_fss_plot <- plot(gp_fss_margins)
+
+#Marginal plot
+gp_fss_1 <- lunaize(gp_fss_plot + 
+  labs(title = "Globus Pallidus",
+       x = "First Stage Stay",
+       y = "R2*",
+       color = "Sex") + 
+  geom_text(aes(x = -2, y = 1.8, 
+                label = "s(FSS)* \nSex n.s."), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("Female" = "#1B9E77", 
+                                "Male" = "#D95F02"), 
+                     name = "Sex",
+                     guide = guide_legend(position = "bottom")))
+
+
+#Nacc model results
+#Note that s(age, by = sex_p) interaction NS. Thus removed.
+na_fss <- gamm(harox_nacc_harm_inv ~ 1 + sex_p + visitnum + 
+                         s(firststagestay_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(na_fss$gam)
+
+#Extract margins
+na_fss_margins <- ggpredict(na_fss$gam,
+               terms = c("firststagestay_z", "sex_p"))
+
+#Storing plot object
+na_fss_plot <- plot(na_fss_margins)
+
+#Marginal plot
+na_fss_1 <- lunaize(na_fss_plot + 
+  labs(title = "Nuclues Accumbens",
+       x = "First Stage Stay",
+       y = "R2*",
+       color = "Sex") + 
+  geom_text(aes(x = -2, y = 1.25, 
+                label = "s(FSS) n.s. \nSex n.s."), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("Female" = "#1B9E77", 
+                                "Male" = "#D95F02"), 
+                     name = "Sex",
+                     guide = guide_legend(position = "bottom")))
+
+
+#Putamen model results
+#Note that s(age, by = sex_p) was trending, thus kept.
+put_fss <- gamm(harox_putamen_harm_inv ~ 1 + sex_p + visitnum + 
+                         s(firststagestay_z, k = 3, fx = TRUE)  
+                         
+                  #+s(firststagestay_z, by = sex_p, k = 3, fx = TRUE)
+                ,
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(put_fss$gam)
+
+#Extract margins
+put_fss_margins <- ggpredict(put_fss$gam,
+               terms = c("firststagestay_z"
+                         , "sex_p"
+                         ))
+
+#Storing plot object
+put_fss_plot <- plot(put_fss_margins)
+
+#Marginal plot
+put_fss_1 <- lunaize(put_fss_plot + 
+  labs(title = "Putamen",
+       x = "First Stage Stay",
+       y = "R2*",
+       color = "Sex") + 
+  geom_text(aes(x = -1.5, y = 1.25, 
+                label = "s(FSS)* \ns(FSS):Sex p=0.06"), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("Female" = "#1B9E77", 
+                                "Male" = "#D95F02"), 
+                     name = "Sex",
+                     guide = guide_legend(position = "bottom")))
+
+
+#Caudate model results
+#Note that s(age, by = sex_p) interaction NS. Thus removed.
+ca_fss <- gamm(harox_caudate_harm_inv ~ 1 + sex_p + visitnum + 
+                         s(firststagestay_z, k = 3, fx = TRUE),
+                      random = list(id = ~1),
+                      method = "REML",
+                      data = full)
+summary(ca_fss$gam)
+
+#Extract margins
+ca_fss_margins <- ggpredict(ca_fss$gam,
+               terms = c("firststagestay_z", "sex_p"))
+
+#Storing plot object
+ca_fss_plot <- plot(ca_fss_margins)
+
+#Marginal plot
+ca_fss_1 <- lunaize(ca_fss_plot + 
+  labs(title = "Caudate",
+       x = "First Stage Stay",
+       y = "R2*",
+       color = "Sex") + 
+  geom_text(aes(x = -2, y = 1.13, 
+                label = "s(FSS) n.s. \nSex n.s."), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("Female" = "#1B9E77", 
+                                "Male" = "#D95F02"), 
+                     name = "Sex",
+                     guide = guide_legend(position = "bottom")))
+
+ggarrange(gp_fss_1, na_fss_1, put_fss_1, ca_fss_1,
+          nrow = 2, ncol = 2,
+          common.legend = TRUE,
+          legend = "bottom")
+```
+
+
+```{r Quantiles for Explore vs. Habit}
+#Bart set cognition to "high performer" and "low performer" for cognition defined as top 5% and bottom 95%.
+quantile(full$firststagestay_z, 1.59) #More Habitual
+quantile(full$firststagestay_z, -1.49) #More Exploratory
+```
+
+
+**Main Effects Models**
+
+
+```{r Main Effects Models GAMM Plots}
+#Main effect model GP
+mod_gp <- gamm(harox_pallidum_harm_inv ~ 1 + sex_p + visitnum + 
+                 s(age, k = 3, fx = TRUE) +
+                 s(firststagestay_z, k = 3, fx = TRUE),
+                 random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_gp$gam)
+
+#Extract margins
+mod_gp_margins <- ggpredict(mod_gp$gam,
+               terms = c("age", "firststagestay_z[-1.48, 1.57]"))
+
+#Storing plot object
+mod_gp_plot <- plot(mod_gp_margins)
+
+#Marginal plot
+mod_gp_1 <- lunaize(mod_gp_plot + 
+  labs(title = "Globus Pallidus",
+       x = "Age",
+       y = "R2*") + 
+  geom_text(aes(x = 14, y = 1.85, 
+                label = "s(Age)* \ns(FSS) n.s."), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("-1.48" = "#1B9E77", 
+                                "1.57" = "#D95F02"),
+                     labels = c("More Exploratory", "More Habitual"),
+                     name = "",
+                     guide = guide_legend(position = "bottom")))
+draw(mod_gp$gam)
+
+
+
+#Main effect model GP
+mod_na <- gamm(harox_nacc_harm_inv ~ 1 + sex_p + visitnum + 
+                 s(age, k = 3, fx = TRUE) +
+                 s(firststagestay_z, k = 3, fx = TRUE),
+                 random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_na$gam)
+
+#Extract margins
+mod_na_margins <- ggpredict(mod_na$gam,
+               terms = c("age", "firststagestay_z[-1.48, 1.57]"))
+
+#Storing plot object
+mod_na_plot <- plot(mod_na_margins)
+
+#Marginal plot
+mod_na_1 <- lunaize(mod_gp_plot + 
+  labs(title = "Nucleus Accumbens",
+       x = "Age",
+       y = "R2*") + 
+  geom_text(aes(x = 14, y = 1.85, 
+                label = "s(Age)* \ns(FSS) n.s."), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("-1.48" = "#1B9E77", 
+                                "1.57" = "#D95F02"),
+                     labels = c("More Exploratory", "More Habitual"),
+                     name = "",
+                     guide = guide_legend(position = "bottom")))
+draw(mod_na$gam)
+
+
+#Main effect model putamen
+mod_put <- gamm(harox_putamen_harm_inv ~ 1 + sex_p + visitnum + 
+                 s(age, k = 3, fx = TRUE) +
+                 s(firststagestay_z, k = 3, fx = TRUE),
+                 random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_put$gam)
+
+#Extract margins
+mod_put_margins <- ggpredict(mod_put$gam,
+               terms = c("age", "firststagestay_z[-1.48, 1.57]"))
+
+#Storing plot object
+mod_put_plot <- plot(mod_put_margins)
+
+#Marginal plot
+mod_put_1 <- lunaize(mod_put_plot + 
+                           labs(title = "Putamen",
+                                x = "Age", 
+                                y = "R2*") + 
+                           geom_text(aes(x = 14, y = 1.3, 
+                                         label = "s(Age)* \ns(FSS)*"),
+                                     size = 6, 
+                                     color = "black") +
+                           geom_line(aes(
+                             color = factor(
+                               mod_put_plot$data$group_col))) +
+                           geom_ribbon(aes(
+                             ymin = mod_put_plot$data$conf.low, 
+                             ymax = mod_put_plot$data$conf.high,
+                             fill = 
+                               factor(mod_put_plot$data$group_col)),
+                             alpha = 0.2) + 
+                           scale_color_manual(values = c("#1B9E77", 
+                                                         "#D95F02"), 
+                                              labels = c(
+                                                "More Exploratory", 
+                                                "More Habitual"),
+                                              name = "", 
+                                              guide = 
+                                                guide_legend(
+                                                  position = "bottom")) + 
+                           scale_fill_manual(values = c("#1B9E77", 
+                                                        "#D95F02"), 
+                                             name = "", 
+                                             guide = 
+                                               guide_legend(
+                                                 position = "bottom")))
+draw(mod_put$gam)
+
+
+#Main effect model caudate
+mod_ca <- gamm(harox_caudate_harm_inv ~ 1 + sex_p + visitnum + 
+                 s(age, k = 3, fx = TRUE) +
+                 s(firststagestay_z, k = 3, fx = TRUE),
+                 random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_ca$gam)
+
+#Extract margins
+mod_ca_margins <- ggpredict(mod_ca$gam,
+               terms = c("age", "firststagestay_z[-1.48, 1.57]"))
+
+#Storing plot object
+mod_ca_plot <- plot(mod_ca_margins)
+
+#Marginal plot
+mod_ca_1 <- lunaize(mod_ca_plot + 
+  labs(title = "Caudate",
+       x = "Age",
+       y = "R2*") + 
+  geom_text(aes(x = 14, y = 1.16, 
+                label = "s(Age)* \ns(FSS) n.s."), 
+            size = 6,
+            color = "black") +
+  scale_color_manual(values = c("-1.48" = "#1B9E77", 
+                                "1.57" = "#D95F02"),
+                     labels = c("More Exploratory", "More Habitual"),
+                     name = "",
+                     guide = guide_legend(position = "bottom")))
+draw(mod_ca$gam)
+
+
+ggarrange(mod_gp_1, mod_na_1, mod_put_1, mod_ca_1,
+          nrow = 2, ncol = 2,
+          common.legend = TRUE,
+          legend = "bottom")
+```
+
+Since the association between FSS and putamen R2* appears to be linear, and associations between putamen R2* and age seem to be slightly nonlinear, it is reasonable to allow FSS to vary nonlinearly across age on R2*.
+
+I'll be reserved and restrict how "wiggly" the fit is. Thus, I'll set k=3, fx=T, and method = REML for all models.
+
+**Interaction Model: DA ~ s(age):fss**
+
+```{r Interaction Model GAMM Plots}
+#Interactions model putamen
+mod_put_int <- gamm(harox_putamen_harm_inv ~ 1 + sex_p + visitnum  +
+                 s(age, k = 3, fx = T) +
+                 s(age, by = firststagestay_z, k = 3, fx = T),
+                 random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_put_int$gam)
+
+#Extract margins
+mod_put_int_margins <- ggpredict(mod_put_int$gam,
+               terms = c("age", "firststagestay_z[-1.48, 1.57]"))
+
+#Storing plot object
+mod_put_int_plot <- plot(mod_put_int_margins)
+
+#Marginal plot
+mod_put_int_1 <- lunaize(mod_put_int_plot + 
+                           labs(title = "Putamen",
+                                x = "Age", 
+                                y = "R2*") + 
+                           geom_text(aes(x = 14, y = 1.3, 
+                                         label = "s(Age)* \ns(Age):FSS*"),
+                                     size = 6, 
+                                     color = "black") +
+                           geom_line(aes(
+                             color = factor(
+                               mod_put_int_plot$data$group_col))) +
+                           geom_ribbon(aes(
+                             ymin = mod_put_int_plot$data$conf.low, 
+                             ymax = mod_put_int_plot$data$conf.high,
+                             fill = 
+                               factor(mod_put_int_plot$data$group_col)),
+                             alpha = 0.1) + 
+                           scale_color_manual(values = c("#1B9E77", 
+                                                         "#D95F02"), 
+                                              labels = c(
+                                                "More Exploratory", 
+                                                "More Habitual"),
+                                              name = "", 
+                                              guide = 
+                                                guide_legend(
+                                                  position = "bottom")) + 
+                           scale_fill_manual(values = c("#1B9E77", 
+                                                        "#D95F02"), 
+                                             name = "", 
+                                             guide = 
+                                               guide_legend(
+                                                 position = "bottom")))
+mod_put_int_1
+draw(mod_put_int$gam, residuals = TRUE)
+draw(mod_put_int$gam)
+```
+
+
+**Interaction Model: DA ~ s(age) + s(fss):FC**
+
+```{r Interaction Model GAMM Plots w/FC measures}
+#This kinda works... at least for vacc/racc/avmpfc
+#sacc is close 0.08
+#pmofc is close 0.08
+mod_vacc_int <- gamm(harox_putamen_harm_inv ~ 1 + sex_p + visitnum + 
+            s(age, k = 3, fx = TRUE)  +
+            s(firststagestay_z, k = 3, fx = TRUE) +
+            #s(age, by = firststagestay_z, k = 3, fx = TRUE) +
+            s(firststagestay_z, 
+              by = put_ca_harm_cb, k = 3, fx = TRUE),     
+            random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_vacc_int$gam)
+
+#Extract margins
+mod_vacc_int_margins <- ggpredict(mod_vacc_int$gam,
+               terms = c(
+                 #"age",
+                 "put_vacc_harm_cb", 
+                 "firststagestay_z[-1.48, 1.57]"))
+
+#Storing plot object
+mod_vacc_int_plot <- plot(mod_vacc_int_margins)
+
+
+
+#Marginal plot
+mod_vacc_int_plot_1 <- lunaize(mod_vacc_int_plot + 
+                           labs(title = "",
+                                x = "vACC - Putamen FC", 
+                                y = "Putamen R2*") + 
+                           geom_text(aes(x = -0.4, y = 1.2, 
+                                         label = 
+                                           "s(Age)* \ns(FSS)*\ns(FSS):FC*"),
+                                     size = 6, 
+                                     color = "black") +
+                           geom_line(aes(
+                             color = factor(
+                               mod_vacc_int_plot$data$group_col))) +
+                           geom_ribbon(aes(
+                             ymin = mod_vacc_int_plot$data$conf.low, 
+                             ymax = mod_vacc_int_plot$data$conf.high,
+                             fill = 
+                               factor(mod_vacc_int_plot$data$group_col)),
+                             alpha = 0.1) + 
+                           scale_color_manual(values = c("#1B9E77", 
+                                                         "#D95F02"), 
+                                              labels = c(
+                                                "More Exploratory", 
+                                                "More Habitual"),
+                                              name = "", 
+                                              guide = 
+                                                guide_legend(
+                                                  position = "bottom")) + 
+                           scale_fill_manual(values = c("#1B9E77", 
+                                                        "#D95F02"), 
+                                             name = "", 
+                                             guide = 
+                                               guide_legend(
+                                                 position = "bottom")))
+mod_vacc_int_plot_1
+draw(mod_vacc_int$gam, residuals = TRUE)
+draw(mod_vacc_int$gam, ncol = 3)
+
+#rACC - Putamen Connectivity
+mod_racc_int <- gamm(harox_putamen_harm_inv ~ 1 + sex_p + visitnum + 
+            s(age, k = 3, fx = TRUE)  +
+            s(firststagestay_z, k = 3, fx = TRUE) +
+            #s(age, by = firststagestay_z, k = 3, fx = TRUE) +
+            s(firststagestay_z, 
+              by = put_racc_harm_cb, k = 3, fx = TRUE),     
+            random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_racc_int$gam)
+
+#Extract margins
+mod_racc_int_margins <- ggpredict(mod_racc_int$gam,
+               terms = c(
+                 #"age",
+                 "put_racc_harm_cb", 
+                 "firststagestay_z[-1.48, 1.57]"))
+
+#Storing plot object
+mod_racc_int_plot <- plot(mod_racc_int_margins)
+
+
+
+#Marginal plot
+mod_racc_int_plot_1 <- lunaize(mod_racc_int_plot + 
+                           labs(title = "",
+                                x = "rACC - Putamen FC", 
+                                y = "Putamen R2*") + 
+                           geom_text(aes(x = -0.4, y = 1.2, 
+                                         label = 
+                                           "s(Age)* \ns(FSS)*\ns(FSS):FC*"),
+                                     size = 6, 
+                                     color = "black") +
+                           geom_line(aes(
+                             color = factor(
+                               mod_racc_int_plot$data$group_col))) +
+                           geom_ribbon(aes(
+                             ymin = mod_racc_int_plot$data$conf.low, 
+                             ymax = mod_racc_int_plot$data$conf.high,
+                             fill = 
+                               factor(mod_racc_int_plot$data$group_col)),
+                             alpha = 0.1) + 
+                           scale_color_manual(values = c("#1B9E77", 
+                                                         "#D95F02"), 
+                                              labels = c(
+                                                "More Exploratory", 
+                                                "More Habitual"),
+                                              name = "", 
+                                              guide = 
+                                                guide_legend(
+                                                  position = "bottom")) + 
+                           scale_fill_manual(values = c("#1B9E77", 
+                                                        "#D95F02"), 
+                                             name = "", 
+                                             guide = 
+                                               guide_legend(
+                                                 position = "bottom")))
+mod_racc_int_plot_1
+draw(mod_racc_int$gam, residuals = TRUE)
+draw(mod_racc_int$gam, ncol = 3)
+
+#avmPFC - Putamen Connectivity
+mod_avmpfc_int <- gamm(harox_putamen_harm_inv ~ 1 + sex_p + visitnum + 
+            s(age, k = 3, fx = TRUE)  +
+            s(firststagestay_z, k = 3, fx = TRUE) +
+            #s(age, by = firststagestay_z, k = 3, fx = TRUE) +
+            s(firststagestay_z, 
+              by = put_avmpfc_harm_cb, k = 3, fx = TRUE),     
+            random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_avmpfc_int$gam)
+
+#Extract margins
+mod_avmpfc_int_margins <- ggpredict(mod_avmpfc_int$gam,
+               terms = c(
+                 #"age",
+                 "put_avmpfc_harm_cb", 
+                 "firststagestay_z[-1.48, 1.57]"))
+
+#Storing plot object
+mod_avmpfc_int_plot <- plot(mod_avmpfc_int_margins)
+
+
+
+#Marginal plot
+mod_avmpfc_int_plot_1 <- lunaize(mod_avmpfc_int_plot + 
+                           labs(title = "",
+                                x = "avmPFC - Putamen FC", 
+                                y = "Putamen R2*") + 
+                           geom_text(aes(x = -0.4, y = 1.2, 
+                                         label = 
+                                           "s(Age)* \ns(FSS)*\ns(FSS):FC*"),
+                                     size = 6, 
+                                     color = "black") +
+                           geom_line(aes(
+                             color = factor(
+                               mod_avmpfc_int_plot$data$group_col))) +
+                           geom_ribbon(aes(
+                             ymin = mod_avmpfc_int_plot$data$conf.low, 
+                             ymax = mod_avmpfc_int_plot$data$conf.high,
+                             fill = 
+                               factor(mod_avmpfc_int_plot$data$group_col)),
+                             alpha = 0.1) + 
+                           scale_color_manual(values = c("#1B9E77", 
+                                                         "#D95F02"), 
+                                              labels = c(
+                                                "More Exploratory", 
+                                                "More Habitual"),
+                                              name = "", 
+                                              guide = 
+                                                guide_legend(
+                                                  position = "bottom")) + 
+                           scale_fill_manual(values = c("#1B9E77", 
+                                                        "#D95F02"), 
+                                             name = "", 
+                                             guide = 
+                                               guide_legend(
+                                                 position = "bottom")))
+mod_avmpfc_int_plot_1
+draw(mod_avmpfc_int$gam, residuals = TRUE)
+draw(mod_avmpfc_int$gam, ncol = 3)
+```
+
+
+
+
+**Testing Derivatives**
+
+This approach seems usefull for all on the GAM related stuff. Especially because it appears to account for interactions.
+
+```{r Testing Derivatives}
+#Extract derivatives
+d <- derivatives(mod_avmpfc_int, 
+                 n = 200
+                 #term = "put_vacc_harm_cb",
+                 #partial_match = TRUE
+                 )
+#Plot derivatives
+draw(d)
+
+#Calculate regions of significance, where CI != 0
+d <- d %>% mutate(sig = !(0>.lower_ci & 0<.upper_ci))
+
+#Split data into s(age) and s(age):FSS
+d_age <- d %>% slice(1:200)
+d_age_fss <- d %>% slice(201:400)
+d_fss_fc <- d %>% slice(40201:40400)
+#Range of significane for age
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(d_age$age[d_age$sig==T]),
+  max(d_age$age[d_age$sig==T]))) 
+
+#Range of significance for FSS
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(d_age_fss$firststagestay_z[d_age_fss$sig==T]),
+  max(d_age_fss$firststagestay_z[d_age_fss$sig==T]))) 
+
+#Range of significance for FSS:FC
+cat(sprintf(
+  "\nSignificant change: %1.2f - %1.2f\n",
+  min(d_fss_fc$firststagestay_z[d_fss_fc$sig==T]),
+  max(d_fss_fc$firststagestay_z[d_fss_fc$sig==T])))
+```
+
+
+**Mediation Models**
+
+```{r Mediation Models}
+#Treating visitnum as numeric?
+full$visitnum_numeric <- as.numeric(full$visitnum)
+#a path, indirect effect
+m2 <- gam(harox_putamen_harm_inv ~ 1 + sex + visitnum_numeric +
+            s(age, k = 3, fx = TRUE), 
+          method = "REML", 
+          data = full %>% filter(complete.cases(.)))
+summary(m2)
+
+m3 <- gam(firststagestay ~ 1 + sex + visitnum_numeric + 
+             s(harox_putamen_harm_inv, k = 3, fx = TRUE) +
+             s(age, k = 3, fx = TRUE),
+          method = "REML", 
+          data = full %>% filter(complete.cases(.)))
+summary(m3)
+
+m2 <- lm(harox_putamen_harm_inv_cb ~ 1 +  sex + visitnum_numeric + inv_age, data = full, na.action = na.exclude)
+m3 <- lm(firststagestay_cb ~ 1 + sex + visitnum_numeric + inv_age + harox_putamen_harm_inv_cb, data = full, na.action = na.exclude)
+
+#Note that visitnum messes things up. Perhaps change to factor/numeric?
+#Testing moderated mediation models. Looking at "high habit" people.
+#high_habit <- mean(full$firststagestay_z) - sd(full$firststagestay_z)
+
+testing <- mediation::mediate(m2, m3, 
+                              treat = "inv_age",
+                   mediator = "harox_putamen_harm_inv_cb", 
+                   boot = T, 
+                   sims = 5000)
+summary(testing)
+plot(testing)
+
+
+
+#Other approach using bmlm
+med_check <- mlm(d = full %>% filter(complete.cases(.)),
+                 id = "id",
+                 x = "firststagestay_cw",
+                 m = "put_vacc_harm_cw",
+                 y = "harox_putamen_harm_inv_cw")
+
+mlm_summary(med_check)
+mlm_path_plot(med_check, 
+              level = 0.95, 
+              text = TRUE)
+# pull out exact fixed effect for indirect effect
+fit_tidy <- tidy(med_check)
+me_fixed <- subset(fit_tidy, term == "me")$estimate
+
+med_check_sma <- mlm(d = full %>% filter(complete.cases(.)),
+                 id = "id",
+                 x = "age",
+                 m = "harox_putamen_harm_inv_cw",
+                 y = "put_sma_harm_cw")
+
+mlm_summary(med_check)
+mlm_path_plot(med_check, 
+              level = 0.95, 
+              text = TRUE)
+
+```
+
+
+Next code chunk shows how caudate and putamen have opposite influence on habitual responding. Specifically, increases in caudate tat2 is associated with decreases in habits, and increases in putamen tat2 is associated with increases in habits. This pattern holds across the various RL parameters. Note that when age is included, caudate is not significant, but still opposite in direction.
+
+```{r Main Effect Model put/ca tat2 on habit Opposite effects}
+#Linear model without age
+ca_put_me_mod_lin <- lmer(firststagestay ~ 1 + sex + visitnum  +  
+                            harox_caudate_harm_z + harox_putamen_harm_z + (1|id), 
+                          data = full,
+                          na.action = na.exclude)
+summary(ca_put_me_mod_lin)
+plot(ggpredict(ca_put_me_mod_lin, terms = c("harox_putamen_harm_z")))
+plot(ggpredict(ca_put_me_mod_lin, terms = c("harox_caudate_harm_z")) )
+
+#Linear model with age
+ca_put_me_mod_lin_age <- lmer(firststagestay ~ 1 + sex + visitnum + 
+                           inv_age + harox_caudate_harm_z + inv_age*harox_putamen_harm_z + (1|id),
+                           data = full, 
+                           na.action = na.exclude)
+summary(ca_put_me_mod_lin_age)
+
+plot(ggpredict(ca_put_me_mod_lin_age, terms = c("harox_putamen_harm_inv_z")))
+plot(ggpredict(ca_put_me_mod_lin_age, terms = "harox_caudate_harm_inv_z"))
+
+#Equivalent gam model without age
+ca_put_me_mod_gam <- gamm(firststagestay ~ 1 + sex_p + visitnum  +
+                            s(harox_putamen_harm_z, k = 3, fx = T) +
+                            s(harox_caudate_harm_z, k = 3, fx = T),
+                          random = list(id = ~1),
+                          method = "REML",
+                          data = full)
+summary(ca_put_me_mod_gam$gam)
+
+#draw(ca_put_me_mod_gam)
+
+plot(ggpredict(ca_put_me_mod_gam, terms = c("harox_putamen_harm_z")))
+plot(ggpredict(ca_put_me_mod_gam, terms = c("harox_caudate_harm_z")))
+
+#Equivalent gam model with age
+ca_put_me_mod_gam_age <- gamm(firststagestay ~ 1 + sex_p + visitnum  + 
+                                s(age, k = 3, fx = TRUE) +
+                            s(harox_putamen_harm_inv, k = 3, fx = TRUE) +
+                            s(harox_caudate_harm_inv, k = 3, fx = TRUE),
+                          random = list(id = ~1),
+                          method = "REML",
+                          data = full)
+summary(ca_put_me_mod_gam_age$gam)
+
+draw(ca_put_me_mod_gam_age)
+
+
+#Interaction test. If there is signal in linear space, can move to gam.
+#Not seeing much
+ca_put_int_mod_lin_age <- lmer(firststagestay ~ 1 + sex + visitnum_numeric + 
+                           inv_age + harox_nacc_harm_inv_z + harox_putamen_harm_inv_z + (1|id),
+                           data = full, 
+                           na.action = na.exclude)
+summary(ca_put_int_mod_lin_age)
+
+```
+
+
+Next code chunk looks at Daw parameters as predictors in the same model predicting the iron measures. There is some good stuff here that I can consider keeping. For example, it seem that age is moderating the association between behavior and iron measures.
+
+
+WTF!!!
+```{r Interaction Models both Daw parameters}
+#Keep this for sure! The smooth age by MB interaction.
+mod_put_int <- gamm(harox_putamen_harm ~ 1 + sex_p + visitnum  +
+                 s(age, k = 3, fx = T) +
+                 s(age, by = modelbased_z, k = 3, fx = T) +
+                 s(age, by = firststagestay_z, k = 3, fx = T) ,
+                 random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_put_int$gam)
+draw(mod_put_int)
+plot(ggpredict(mod_put_int$gam,
+               terms = c("age", "firststagestay_z[-1,1]")))
+plot(ggpredict(mod_put_int$gam,
+               terms = c("age", "modelbased_z[-1,1]")))
+
+
+#Main effects
+mod_lin <- lmer(harox_putamen_harm_inv ~ 1 + sex + visitnum_numeric + 
+                  age + firststagestay_z + modelbased_z + modelfree_z  + (1|id),
+                data = full,
+                na.action = na.exclude)
+summary(mod_lin)
+
+
+#Linear test Keep with putamen!
+#Note that age:fss interaction was removed due to nonsignficance.
+mod_lin <- lmer(harox_putamen_harm_inv ~ 1 + sex + visitnum_numeric + 
+                  age + firststagestay_z + modelbased_z + modelfree_z + age:modelbased_z  + age:firststagestay_z +(1|id),
+                data = full,
+                na.action = na.exclude)
+summary(mod_lin)
+plot(ggpredict(mod_lin,
+               terms = c( "modelbased_z", "age")))
+plot(ggpredict(mod_lin,
+               terms = c( "age", "modelbased_z[-1,1]")))
+plot(ggpredict(mod_lin,
+               terms = c("firststagestay_z", "age")))
+plot(ggpredict(mod_lin,
+               terms = c( "age", "firststagestay_z[-1,1]")))
+interactions::johnson_neyman(mod_lin, pred = modelbased_z, modx = age)
+
+
+#Linear test Keep with caudate!
+#Note that age:fss interaction was removed due to nonsignficance.
+mod_lin <- lmer(harox_caudate_harm_inv ~ 1 + sex + visitnum_numeric + 
+                  age + firststagestay_z + modelbased_z + modelfree_z + age:modelbased_z  + (1|id),
+                data = full,
+                na.action = na.exclude)
+summary(mod_lin)
+plot(ggpredict(mod_lin,
+               terms = c("modelbased_z", "age")))
+plot(ggpredict(mod_lin,
+               terms = c("age", "firststagestay_z[-1, 1]")))
+interactions::johnson_neyman(mod_lin, pred = modelbased_z, modx = age)
+
+#NAACC did not work, but keep with pallidum/
+mod_lin <- lmer(harox_pallidum_harm_inv ~ 1 + sex + visitnum_numeric + 
+                  age + firststagestay_z + modelbased_z + modelfree_z + age:modelbased_z + age:firststagestay_z  + (1|id),
+                data = full,
+                na.action = na.exclude)
+summary(mod_lin)
+plot(ggpredict(mod_lin,
+               terms = c("age", "modelbased_z[-1, 1]")))
+plot(ggpredict(mod_lin,
+               terms = c("age", "firststagestay_z[-1, 1]")))
+interactions::johnson_neyman(mod_lin, pred = modelbased_z, modx = age)
+
+
+#Striatum test
+mod_lin <- lmer(harox_striatum_harm_inv ~ 1 + sex + visitnum_numeric + 
+                  age + firststagestay_z + modelbased_z + modelfree_z + age:modelbased_z + age:firststagestay_z  + (1|id),
+                data = full,
+                na.action = na.exclude)
+summary(mod_lin)
+plot(ggpredict(mod_lin,
+               terms = c("age", "modelbased_z[-1, 1]")))
+plot(ggpredict(mod_lin,
+               terms = c("age", "firststagestay_z[-1, 1]")))
+interactions::johnson_neyman(mod_lin, pred = modelbased_z, modx = age)
+
+#Keep as well.
+mod_put_int <- gamm(harox_putamen_harm_inv ~ 1 + sex_p + visitnum  +
+                 s(age, k = 3, fx = T) +
+                 s(modelbased_z, k = 3, fx = T) +
+                 s(firststagestay_z, k = 3, fx = T) +
+                   s(modelfree_z, k = 3, fx = T) +
+                   ti(age, firststagestay_z, k = 3, fx = T) +
+                   ti(age, modelbased_z, k = 3, fx = T) +
+                   ti(age, modelfree_z, k = 3, fx = T),
+                 random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_put_int$gam)
+draw(mod_put_int)
+plot(ggpredict(mod_put_int$gam,
+               terms = c("age", "firststagestay_z[-1, 1]")))
+plot(ggpredict(mod_put_int$gam,
+               terms = c("age", "modelbased_z[-1, 1]")))
+
+
+
+#Try opposite. Next mess around with TI?
+mod_put_int <- gamm(firststagestay_z ~ 1 + sex_p + visitnum  + harox_caudate_harm_inv + harox_nacc_harm_inv + 
+                 s(age, k = 3, fx = T) +
+                # s(harox_caudate_harm_inv, k = 3, fx = T) +
+                #   s(harox_nacc_harm_inv, k = 3, fx = T) +
+                #   s(harox_pallidum_harm_inv, k = 3, fx = T) +
+                 s(harox_putamen_harm_inv, k = 3, fx = T),
+                 random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_put_int$gam)
+draw(mod_put_int)
+plot(ggpredict(mod_put_int$gam,
+               terms = c("age", "firststagestay_z[-1.48, 1.57]")))
+
+
+#Keep as well. This might make the most sense considering past analyses.
+mod_put_int <- gamm(harox_putamen_harm_inv ~ 1 + sex_p + visitnum  + 
+                 s(age, k = 3, fx = T) +
+                 s(age, by = firststagestay_z, k = 3, fx = T) +
+                  # s(age, by = modelfree_z, k = 3, fx = T) +
+                 s(age, by = modelbased_z, k = 3, fx = T),
+                 random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_put_int$gam)
+draw(mod_put_int)
+plot(ggpredict(mod_put_int$gam, 
+               terms = c("age", "firststagestay_z[-1,1]")))
+plot(ggpredict(mod_put_int$gam, 
+               terms = c("firststagestay_z", "age")))
+plot(ggpredict(mod_put_int$gam, 
+               terms = c("age", "modelbased_z[-1,1]")))
+plot(ggpredict(mod_put_int$gam, 
+               terms = c("modelbased_z", "age")))
+
+```
+
+
+Used for poster. Note that p-value is different from submission due to changes in data structure. Consider re-fitting with analyses script labeled 040224.
+
+```{r Research Day Abstract Submission}
+t <- gamm(firststagestay ~ 1 + sex + visitnum + 
+            s(age, k = 3, fx = F) + 
+            s(nacc_pmofc_harm, k = 3, fx = F),random = list(id = ~1), 
+                       method = "REML", 
+                       data = full)
+summary(t$gam)
+summary(t$lme)
+hypothesis_test()
+
+lunaize(plot(ggpredict(t$gam, 
+                        terms = c("age")))) + theme_bw()
+lunaize(plot(ggpredict(t$gam, 
+                        terms = c("nacc_pmofc_harm")))) + theme_bw()
+
+t_int <- gamm(firststagestay ~ 1 + sex + visitnum + 
+            s(age, k = 3, fx = F) + 
+            s(age, by = nacc_pmofc_harm, k = 3, fx = F),random = list(id = ~1), 
+                       method = "REML", 
+                       data = full)
+summary(t_int$gam)
+summary(t_int$lme)
+lunaize(plot(ggpredict(t_int$gam, 
+                        terms = c("nacc_pmofc_harm", "age")))) + theme_bw()
+lunaize(plot(ggpredict(t$gam, 
+                        terms = c("nacc_pmofc_harm")))) + theme_bw()
+```
+
+
+
+```{r}
+adults <- full %>% filter(age > 18)
+lunaize(ggplot(data = full, 
+               aes(x=age, y=harox_striatum_harm_inv, group = id)) + 
+  geom_point() +
+  geom_line() +
+  theme_bw() +
+  stat_smooth(method = "gam",  aes(group = 1), color = "black") +
+  #guides(fill = "none", color = "none") +
+  labs(x = "Age", y = "Striatum nT2*w") +
+ #scale_color_brewer(palette = "Dark2", 
+ #                   name = "Sex")) +
+  theme(legend.position = "bottom") +
+  geom_text(aes(x = 33.5, y = 1.3, 
+                label = "***"), 
+            size = 6,
+            color = "black") )
+
+t <- lmer(harox_striatum_harm_inv ~ 1 + age + (1|id), data = full)
+summary(t)
+```
+
+
+Puberty check?
+
+```{r}
+#Messign aorund with random intercept effects. 
+full_pub <- full 
+test <- lm(harox_putamen_harm ~ 1 + age, 
+             data = full_pub, 
+             na.action = na.exclude)
+summary(test)
+full_pub$pred_test <- predict(test)
+full_pub$resid_test <- residuals(test)
+#Function for "prototype"
+fun_proto <- function(x) {
+  1 + -0.006*x
+}
+
+#Note that lines are parallel
+ggplot(data = full_pub, aes(x = age, y = pred_test, group = id)) +
+  ggtitle("Fixed Linear, Random Intercept") +
+  geom_line() +
+  stat_function(fun = fun_proto, color = "blue", linewidth = 2)
+
+#Plotting residuals
+ggplot(data = full_pub, aes(x = age, y = resid_test, group = id)) +
+  ggtitle("Residuals by age") +
+  geom_point() +
+  geom_line() +
+  geom_smooth(method = "lm", aes(group = 1))
+#Notice the variance differing around 0. No specific pattern in residuals as well.
+pub_test <- lmer(resid_test~ 1 + PDSS + (1|id), 
+             data = full_pub, 
+             na.action = na.exclude)
+summary(pub_test)
+plot(ggpredict(pub_test))
+
+
+
+
+
+mod_put_int <- gamm(harox_putamen_harm ~ 1 + sex_p + visitnum  + PDSS +
+                 s(age, k = 3, fx = T) +
+                 s(age, by = modelbased_z, k = 3, fx = T) +
+                 s(age, by = firststagestay_z, k = 3, fx = T) ,
+                 random = list(id = ~1),
+                 method = "REML",
+                 data = full)
+summary(mod_put_int$gam)
+draw(mod_put_int)
+
+a <- lmer(harox_putamen_harm ~ 1 + sex + visitnum_numeric + PDSS + age + modelbased_z + firststagestay_z + modelfree_z +
+            + age:firststagestay_z + age:modelbased_z + (1|id),
+          data = full, na.action = na.exclude)
+summary(a)
+plot(ggpredict(a, terms = c("age", "modelbased_z")))
+plot(ggpredict(a, terms = c("age", "firststagestay_z")))
+```
+
+
+

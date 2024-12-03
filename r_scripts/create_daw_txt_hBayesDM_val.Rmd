@@ -1,0 +1,132 @@
+---
+title: "create_daw_txt_hBayesDM_val"
+author: "Daniel Petrie"
+date: "2024-08-01"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+This script takes Daw trial level data, does some cleaning, and saves a txt file to be used as input for hBayesDM.
+
+Note: For Val I am running hBayesDM on entire 7t sample and for kids and adults. Output is three txt files.
+
+```{r}
+library(tidyverse)
+library(dplyr)
+
+#Working Directory
+setwd("H:/Dan/rl_models/val")
+
+#Read in data trial-level beh data
+luna_7t <- read.csv("luna_7tbrainmech.csv", header = TRUE)
+
+#Subject Ages
+luna_7t_ages <- read.csv("merged_7t.csv", header = TRUE)
+```
+
+Recoding trial data to fit hBayesDM requirements. See documentation at https://ccs-lab.github.io/hBayesDM/reference/ts_par7.html
+
+```{r}
+luna_7t <- luna_7t %>% 
+group_by(id) %>% 
+mutate(trial = row_number()) %>% 
+filter(choice1 != 0 & choice2 != 0) %>% 
+rename(subjID = id, level1_choice = choice1, reward = money) %>% 
+mutate(level2_choice = case_when(
+level1_choice == 1 & choice2 == 1 & state == 2 ~ 1, 
+level1_choice == 1 & choice2 == 2 & state == 2 ~ 2, 
+level1_choice == 2 & choice2 == 1 & state == 3 ~ 3, 
+level1_choice == 2 & choice2 == 2 & state == 3 ~ 4, 
+level1_choice == 1 & choice2 == 1 & state == 3 ~ 3, 
+level1_choice == 1 & choice2 == 2 & state == 3 ~ 4, 
+level1_choice == 2 & choice2 == 1 & state == 2 ~ 1, 
+level1_choice == 2 & choice2 == 2 & state == 2 ~ 2)) %>% 
+  #remove duplicates
+filter(!(subjID %in% c("11455_20181218", "11565_20190709")))
+```
+
+luna_7t can now be used for hBayesDM on full sample.
+
+Checking amount of trials for each subject of each visit.
+
+```{r}
+subject_counts <- luna_7t %>%
+  group_by(subjID) %>%
+  dplyr::summarize(trial_count = n())
+```
+
+Extracting ages from merged_7t.csv
+
+```{r}
+luna_7t_ages <- luna_7t_ages %>%
+  select(lunaid, behave.date, behave.age) %>%
+  rename(subjID = lunaid)
+```
+
+
+Adding ages to luna_7t file
+
+```{r}
+#Seperating id and visit date for merging.
+luna_7t_temp <- luna_7t %>%
+  separate(subjID, c("subjID", "behave.date"))
+
+#Making integer variable to allow left_join to work properly.
+luna_7t_temp$subjID <- as.integer(luna_7t_temp$subjID)
+luna_7t_temp$behave.date <- as.integer(luna_7t_temp$behave.date)
+
+#Merge ages
+luna_7t_full <- left_join(luna_7t_temp, luna_7t_ages, by = c("subjID", "behave.date"))
+```
+
+Create kids and adults data frames
+
+```{r}
+#Create a data frame for ages below 18
+kids <- luna_7t_full %>%
+  filter(behave.age < 18)
+
+# Create a data frame for ages 18 and above
+adults <- luna_7t_full %>%
+  filter(behave.age >= 18)
+```
+
+Merging behave.date and subjID back together. This will allow hBayesDM to recognize that each subject has seperate visits (i.e., 200 trials each and not combining across visits!).
+
+```{r}
+# Create a new column by merging `id` and `date` with an underscore, then remove the original columns
+kids <- kids %>%
+  mutate(id_date = paste(subjID, behave.date, sep = "_")) %>%
+  select(-subjID, -behave.date) %>%
+  rename(subjID = id_date) %>%
+  select(subjID, behave.age, trial, level1_choice, level2_choice, reward)
+
+# Create a new column by merging `id` and `date` with an underscore, then remove the original columns
+adults <- adults %>%
+  mutate(id_date = paste(subjID, behave.date, sep = "_")) %>%
+  select(-subjID, -behave.date) %>%
+  rename(subjID = id_date) %>%
+  select(subjID, behave.age, trial, level1_choice, level2_choice, reward)
+```
+
+Checking amount of trials for each subject of each visit.
+
+```{r}
+subject_counts_kids <- kids %>%
+  group_by(subjID) %>%
+  dplyr::summarize(trial_count = n())
+
+subject_counts_adults <- adults %>%
+  group_by(subjID) %>%
+  dplyr::summarize(trial_count = n())
+```
+
+
+Saving .txt files
+
+```{r}
+#write.table(luna_7t, file = "luna_7t.txt", sep = "\t", row.names = FALSE)
+write.table(kids, file = "kids.txt", sep = "\t", row.names = FALSE)
+write.table(adults, file = "adults.txt", sep = "\t", row.names = FALSE)
+```
