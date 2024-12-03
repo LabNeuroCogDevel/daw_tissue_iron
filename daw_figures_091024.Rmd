@@ -10,6 +10,7 @@ editor_options:
 WD/Libraries/data
 
 ```{r Global}
+library(rstan)
 library("ggplot2") #For plotting
 library("GGally") #ggpairs()
 library("tidyverse") #Wranglin
