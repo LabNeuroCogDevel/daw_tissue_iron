@@ -1,0 +1,325 @@
+---
+title: "rt_analyses"
+author: "Daniel Petrie"
+date: "2024-10-10"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r Global}
+library("ggplot2") #For plotting
+library("GGally") #ggpairs()
+library("tidyverse") #Wranglin
+library("dplyr") #Wranglin
+library("interactions")
+library("lme4") #MLM
+library("lmerTest") #p-vals
+library("ggeffects") #For marginal/conditional effects plots
+library("marginaleffects") #For hypothesis_test()
+library("parameters") #Other useful marginal effects functions
+library("gdata") #upperTriangle()
+library("mgcv") #GAMM
+library("ggpubr") #Combining plots
+library("bmlm") #Centering made easy
+library("neuroCombat") #Harminization
+library("LNCDR") #waterfall plot, lunaize plots 
+library("gratia") #mgcv companion package. Using draw among other funcs.
+library("psych") #Descriptives
+library("ggrain") #Raincloud plot
+library("ggseg") #Brain images
+library("ggseg3d") #3d brain images
+library("see") #Theme modern
+library("viridis") #Additional colors
+library("viridisLite") #Additional colors
+library("ggnewscale") #new_scale()
+#library("corrplot") #Corrplot()
+#Working directory (change to something better (onedrive?, something else?) at some point)
+#Hera feels correct at this moment. All files could live in directory R for this project.
+setwd("C:/Users/djpet/OneDrive/Documents/daw_resting_state/rt_analyses")
+
+full <- read.csv("C:/Users/djpet/OneDrive/Documents/daw_resting_state/daw_project_081624.csv", 
+                 header = TRUE)
+
+rt <- read.csv("all_daw.csv", header = TRUE)
+```
+
+
+Cleaning RT data
+
+```{r}
+#Removing "from" column
+luna_rt <- rt %>%
+  select(-from)
+
+#Removes rows where choice is not a number. RT files are concatenated such that each subject has a header row that needs to be removed.
+luna_rt <- luna_rt[!grepl("[^0-9.]", luna_rt$choice1), ]
+
+#Reordering row numbers
+row.names(luna_rt) <- NULL
+
+#Changes columns to numeric. All are reading in as character variables for some reason.
+cols_to_convert <- c("choice1", "choice2", 
+                     "state", "money", "rts1", "rts2")
+luna_rt[cols_to_convert] <- lapply(luna_rt[cols_to_convert], as.numeric)
+
+
+#Separating id column into "id" and "visit"
+luna_rt <- luna_rt %>%
+  separate(id, c("lunaid", "behave.date"))
+
+#Adding trial number for indexing purposes
+luna_rt <-  luna_rt %>% 
+  group_by(lunaid, behave.date) %>%
+  mutate(trial = row_number()) 
+
+#Remove rows where behave data = NA. These are test subjects
+luna_rt <- luna_rt %>%
+  filter(!(lunaid %in% c(99999, "aqtest", "test")))
+
+length(unique(luna_rt$lunaid)) #487 seems appropiate
+
+#Visit number for lagged
+luna_rt <- luna_rt %>% 
+  group_by(lunaid) %>% 
+  mutate(visitnum = as.integer(factor(behave.date, levels = unique(behave.date))))
+
+#I think all I need is to create a (non) lagged column reflecting whether current trial was common vs. rare.
+luna_rt <- luna_rt %>% 
+  mutate(commonrare = as.factor(ifelse((choice1 == 1 & state == 2) |
+                                  (choice1 == 2 & state == 3),
+                                "Common",
+                                "Rare")))
+
+
+
+#Don't think I need lagged stuff for this analyses.
+#Lagging variables to calculate transitional variables.
+luna_rt <- luna_rt %>% 
+  group_by(lunaid, visitnum) %>% 
+  mutate(choice1lag = lag(choice1), #Indexing for common/rare transition
+         choice2lag = lag(choice2), #Indexing for common/rare transition
+         statelag = lag(state),     #Indexing for common/rare transition
+         moneylag = lag(money),     #Indexing for reward on previous trial
+         rts1lag = lag(rts1),       #Lagging RT stage 1 just in case  
+         rts2lag = lag(rts2))       #Lagging RT stage 2 for after common vs rare transition
+
+# transitional variables
+luna_rt <- luna_rt %>% 
+  mutate(commonrare_l = as.factor(ifelse((choice1lag == 1 & statelag == 2) | 
+                                         (choice1lag == 2 & statelag == 3),
+                                       'Common', 
+                                       'Rare')), 
+         commonraredummy_l = ifelse(commonrare_l=="Common", 
+                                  1, 
+                                  -1),
+         commonraredummy = ifelse(commonrare == "Common",
+                                  1,
+                                  -1),
+         moneylagdummy = ifelse(moneylag == 1, 
+                                1, 
+                                -1), 
+         firststagestay = ifelse(choice1 == choice1lag, 
+                                 1, 
+                                 0), 
+         stayswitchwinlose = ifelse(firststagestay==1 & moneylag==0, 'lose-stay',
+                             ifelse(firststagestay==1 & moneylag==1, 'win-stay', 
+                                    ifelse(firststagestay==0 & moneylag==0,
+                                           'lose-switch', 
+                                           'win-switch'))),
+         winswitch = ifelse(stayswitchwinlose== "win-switch",
+                            1,
+                            0),
+         winswitch_common = ifelse(commonrare == "Common" & 
+                            stayswitchwinlose == "win-switch", 
+                            1,
+                            0),
+          winswitch_rare = ifelse(commonrare == "Rare" &
+                            stayswitchwinlose == "win-switch",
+                          1,
+                          0))
+```
+
+
+Cleaning full data for merging.
+
+```{r}
+full_sub <- full %>%
+  select(id, visitnum, age, sex, study, behave.date, 
+         modelbased, modelfree, firststagestay,
+         modelbased_z, modelfree_z, firststagestay_z) %>%
+  rename(lunaid = id)
+```
+
+Merging chunk and some preprocessing.
+
+```{r}
+dat <- merge(luna_rt, full_sub, by = c("lunaid", "visitnum"))
+
+#Age groups for plotting
+#Converting rt to milliseconds
+#Z-scoring age and rt in milliseconds for analyses,
+dat <- dat %>%
+  mutate(age_cat = cut(age,
+                       breaks = c(10,13,17,24,34),
+                       labels = c("10-13 years", "14-17 years", "18-24 years", "25-34 years"),
+                       include.lowest = TRUE),
+         rts2_ms = rts2 * 1000,
+         rts2_ms_z = scale(rts2_ms),
+         age_z = scale(age)) %>%
+  arrange(lunaid, visitnum, trial)
+```
+
+
+
+This script examines RT at the second stage choice as a function of transition type using a multilevel model. If subjects were not aware of transition structure, we would expect no response time differences after common transitions compared with rare transitions.
+
+Eq:
+RT_2nd stage ~ 1 + Age + Transition + Age:Transition + (1|id)
+
+```{r}
+t_1 <- lmer(rts2_ms ~ 1 + commonraredummy + age_z + 
+              commonraredummy:age_z + (1|lunaid),
+          data = dat,
+          na.action = na.exclude)
+summary(t_1)
+
+t_2 <- lmer(rts2_ms ~ 1 + commonraredummy + age_z + 
+              commonraredummy:age_z + (1 + commonraredummy|lunaid),
+          data = dat,
+          na.action = na.exclude)
+summary(t_2)
+
+t_3 <- lmer(rts2_ms ~ 1 + commonraredummy + age_z + 
+            commonraredummy:age_z + (1|lunaid:visitnum),
+          data = dat,
+          na.action = na.exclude)
+summary(t_3)
+confint(t_3)
+anova(t_1, t_2, t_3)
+AIC(t_1, t_2, t_3)
+BIC(t_1, t_2, t_3)
+
+#t-3 seems to be the best model.
+plot(ggpredict(t_3, terms = c("age_z", "commonraredummy")))
+```
+
+Plot RT by age group
+
+```{r}
+#Create new data frame by calculating mean, sd, N, and se from trial level data
+rt_stats <- dat %>%
+  group_by(lunaid, visitnum, age_cat, commonrare) %>%
+  dplyr::summarize(mean_rt = mean(rts2_ms, na.rm = TRUE),
+            sd_rt = sd(rts2_ms, na.rm = TRUE),
+            N = n(),
+            se_rt = (sd_rt/sqrt(N)))
+
+# Plot second-stage RTs by age group 
+rt_stats_group <- rt_stats %>%
+  group_by(commonrare, age_cat) %>%
+  dplyr::summarize(mean_rt_group = mean(mean_rt, na.rm = TRUE),
+            N = n(),
+            sd_rt_group = sd(mean_rt, na.rm = TRUE),
+            se_rt = (sd_rt_group/sqrt(N)))
+#Plot
+rt_plot_group <- ggplot(rt_stats_group, 
+                        aes(x = commonrare, 
+                            y = mean_rt_group, 
+                            fill = commonrare)) + 
+  geom_bar(position = "dodge", 
+           stat = "identity", 
+           color = "black") + 
+  geom_errorbar(aes(x = commonrare, 
+                    ymin = mean_rt_group - se_rt, 
+                    ymax = mean_rt_group + se_rt), 
+                width = 0) +
+  xlab("Previous Transition Type") +
+  ylab("Response Time (sec)") +
+  facet_wrap(~age_cat, nrow = 1) +
+  coord_cartesian(ylim = c(500, 1000)) +
+  scale_fill_manual(values = c("royalblue4", "firebrick2")) +
+  theme_minimal() +
+  theme(panel.grid = element_blank(),
+                panel.spacing.x = unit(1, "lines"),
+                axis.line = element_line(size = .1),
+                strip.text.x = element_text(size = 8),
+                axis.title = element_text(size = 8),
+                axis.text = element_text(size = 8),
+                plot.title = element_text(size = 8, face = "bold"),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1))
+rt_plot_group
+
+
+ggsave(filename = 
+         "C:/Users/djpet/OneDrive/Documents/daw_resting_state/figures/figure_S5/rt_plot_group.png", 
+       plot = rt_plot_group,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
+
+Decker and Nussembaum also tested something like this:
+
+Model based coeffiecient ~ 1 + RT_difference + Age + RT_difference:Age + (1|id)
+
+```{r}
+#Calculate each subjects RT difference
+rt_diff <- rt_stats %>%
+  group_by(lunaid, visitnum, age_cat) %>%
+  dplyr::summarize(rt_diff = mean(mean_rt[commonrare == "Rare"], na.rm = TRUE) -
+                      mean(mean_rt[commonrare == "Common"], na.rm = TRUE)) %>%
+  ungroup()
+
+#Mergin modelbased and first stage stay
+rt_diff_daw <- merge(rt_diff, full_sub, by = c("lunaid", "visitnum"))
+
+#Re-zscore for analyses
+rt_diff_daw <- rt_diff_daw %>%
+  mutate(age_z = scale(age),
+         rt_diff_z = scale(rt_diff))
+```
+
+Model
+
+```{r}
+q <- lmer(modelbased ~ 1 + age_z + rt_diff_z + age_z:rt_diff_z + (1|lunaid),
+          data = rt_diff_daw)
+summary(q)
+confint(q)
+plot(ggpredict(q, terms = c("rt_diff_z", "age_z[-2,-1,0,1,2]")))
+
+plot(ggpredict(q, terms = c("age_z", "rt_diff_z[-2,-1,0,1,2]")))
+
+rt_mb_plot <- ggplot(rt_diff_daw, aes(x = rt_diff, y = modelbased)) +
+  geom_point(stat = "identity", size = 0.5) + 
+  geom_smooth(method = "lm", color = "black", linewidth = 0.5) +
+  facet_wrap(~age_cat, nrow = 1) +
+  ylab("Reward x Transition Interaction Effect") +
+  xlab("Response Time Difference (Rare - Common) (ms)") +
+ # coord_cartesian(ylim = c(-.5, 1.5), xlim = c(-200, 600)) +
+  theme_minimal() + 
+  theme(panel.grid = element_blank(),
+        panel.spacing.x = unit(1, "lines"),
+        axis.line = element_line(size = .1),
+        strip.text.x = element_text(size = 8),
+        axis.title = element_text(size = 8),
+        axis.text = element_text(size = 8),
+        plot.title = element_text(size = 8, face = "bold"),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+rt_mb_plot
+
+ggsave(filename = 
+         "C:/Users/djpet/OneDrive/Documents/daw_resting_state/figures/figure_S5/rt_mb_plot.png", 
+       plot = rt_mb_plot,
+       device = "png", 
+       dpi = 500, 
+       units = "mm",
+       width = 90, 
+       height = 60)
+```
+
