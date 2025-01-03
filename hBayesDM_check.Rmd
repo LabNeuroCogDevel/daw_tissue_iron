@@ -1,0 +1,120 @@
+---
+title: "hBayesDM_check"
+output: html_document
+date: "2024-04-23"
+editor_options: 
+  chunk_output_type: console
+---
+
+hBayesDM check
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(rstan)
+library(hBayesDM)
+#setwd("C:/Users/djpet/Documents/daw_resting_state")
+#setwd("H:/Dan/rl_models")
+setwd("/Volumes/Hera/Dan/rl_models")
+#setwd("H:/Dan/rl_models/val")
+par4 <- readRDS("ts_par4_7t_pet_results.rds")
+par6 <- readRDS("ts_par6_7t_pet_results.rds")
+par7 <- readRDS("ts_par7_7t_pet_results.rds")
+```
+
+Ok. This data is pretty intense. I'm going to subset out the parts I actually need to run locally. However, this needs to be done on Hera for computing reasons.
+
+```{r}
+#plot(par4, type = "trace")
+#ggsave("par4_mustache.png")
+#plot(par6, type = "trace")
+#ggsave("par6_mustache.png")
+#plot(par7, type = "trace")
+#ggsave("par7_mustache.png")
+
+#For Supp in Daw manuscript
+plot(par7, type = "trace")
+ggsave("par7_mustache_pi.png")
+plot(par7)
+ggsave("par7_postdist_pi.png")
+plot(par7, type = "simple")
+```
+
+```{r}
+printFit(par4,par6,par7, ic = "both")
+#Outputting fit statistics for viewing.
+fit_par7 <- par7$fit
+fit_check <- fit_par7@sim$samples
+
+#rhat check. Looking for less that 1.04 (liberal) ir less than 1.01 (conservative)
+rhat_check6 <- rhat(par6)
+rhat_check7 <- rhat(par7)
+```
+
+Saving other plots for later.
+
+```{r}
+plot(par4)
+ggsave("par4_dist.png")
+plot(par6)
+ggsave("par6_dist.png")
+plot(par7)
+ggsave("par7_dist.png")
+
+#Run this if we need individual plots for whole sample...
+plotInd(par7, "pi")
+#ggsave()
+#plotInd()
+#ggsave()
+#plotInd()
+#ggsave()
+par4$parVals$
+```
+
+Testing posterior predictive check example. This is with the par4 model.
+
+```{r}
+## dimension of x$parVals$y_pred
+dim(par4$parVals$y_pred_step1)   # y_pred --> 12000 (MCMC samples) x 414 (subjects) x 200 (trials)
+
+y_pred_mean = apply(par4$parVals$y_pred_step1, c(2,3), mean)  # average of 4000 MCMC samples
+
+dim(y_pred_mean)  # y_pred_mean --> 414 (subjects) x 200 (trials)
+
+numSubjs = dim(par4$allIndPars)[1]  # number of subjects
+
+subjList = unique(par4$rawdata$subjID)  # list of subject IDs
+maxT = max(table(par4$rawdata$subjID))  # maximum number of trials
+true_y = array(NA, c(numSubjs, maxT)) # true data (`true_y`)
+
+## true data for each subject
+for (i in 1:numSubjs) {
+  tmpID = subjList[i]
+  tmpData = subset(par4$rawdata, subjID == tmpID)
+  true_y[i, ] = tmpData$level1_choice  # only for data with a 'choice' column
+}
+
+## Subject #1
+plot(true_y[1, ], type="l", xlab="Trial", ylab="Choice (0 or 1)", yaxt="n")
+lines(y_pred_mean[1,], col="red", lty=2)
+axis(side=2, at = c(0,1) )
+legend("bottomleft", legend=c("True", "PPC"), col=c("black", "red"), lty=1:2)
+```
+Let's save output for the 7 parameter model that "won"
+
+Most important file is the allIndPars dataframe. That has the data that I'd need for analyses.
+
+parVals is a list of 1d files that contain the posterior samples of all the parameters. They also contain the hyper-group parameters if those ever become useful.
+
+Actually, I might as well save all of them
+
+```{r}
+par4_indpars <- par4$allIndPars
+write.csv(par4_indpars, file = "par4_indpars.csv", row.names = FALSE)
+par6_indpars <- par6$allIndPars
+write.csv(par6_indpars, file = "par6_indpars.csv", row.names = FALSE)
+par7_indpars <- par7$allIndPars
+write.csv(par7_indpars, file = "par7_indpars.csv", row.names = FALSE)
+```
+
