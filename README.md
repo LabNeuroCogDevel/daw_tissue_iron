@@ -17,3 +17,11 @@ create_daw_txt_hBayesDM.R: Cleaning code for input to hBayesDM. This cleans the 
 hBayesDM_script.R: Contains code to run hBayesDM.
 
 hBayesDM_check.R: Contains code to examine hBayesDM output.
+
+**Description of R scripts for asr/ysr associations with two-step task**
+
+daw_cbcl_asr_ysr_studyA.RMD: Contains code for glm negative binomial models and code for figures.
+
+**Description of R scripts for analyses split across studies**
+
+sep_studyA_studyB.RMD: Contains code for analyses split across studies and code for figures.
