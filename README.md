@@ -8,7 +8,7 @@ daw_figures_091024.Rmd: Contains code for the figures in the manuscript.
 
 stay_probability_091724.Rmd: Contains code for for multilevel logistic regression models, and code for some of the supplementary analyses.
 
-rt_analyses.Rmd: Contains code for reaction-time analyses in the supplementary section.
+rt_analyses.Rmd: Contains code for reaction-time analyses in the supplementary section. **UPDATE WITH CURRENT SCRIPT**
 
 **Descripition of R scripts for hBayesDM analyses:**
 
@@ -20,8 +20,8 @@ hBayesDM_check.R: Contains code to examine hBayesDM output.
 
 **Description of R scripts for asr/ysr associations with two-step task**
 
-daw_cbcl_asr_ysr_studyA.RMD: Contains code for glm negative binomial models and code for figures.
+daw_cbcl_asr_ysr_studyA.RMD: Contains code for glm negative binomial models and code for figures. **ADD SCRIPT**
 
 **Description of R scripts for analyses split across studies**
 
-sep_studyA_studyB.RMD: Contains code for analyses split across studies and code for figures.
+sep_studyA_studyB.RMD: Contains code for analyses split across studies and code for figures. **ADD SCRIPT**
